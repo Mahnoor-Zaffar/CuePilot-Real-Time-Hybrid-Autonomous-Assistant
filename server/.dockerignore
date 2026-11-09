@@ -1,0 +1,11 @@
+# Build context is server/ — keep it to what the image actually needs.
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+tests/
+bench/
+Dockerfile
+.dockerignore
