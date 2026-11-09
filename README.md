@@ -1,5 +1,10 @@
 # cuePilot
 
+[![CI](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776ab?logo=python&logoColor=white)
+![node](https://img.shields.io/badge/node-22-339933?logo=node.js&logoColor=white)
+![deps](https://img.shields.io/badge/deps-uv.lock%20%2B%20package--lock-6b7280)
+
 A real-time desktop copilot that streams grounded answers over a single full-duplex
 WebSocket. Electron/React client, FastAPI gateway, hybrid **BM25 + pgvector** retrieval,
 streamed tool calling, and first-class handling of backpressure, cancellation, reconnect,
@@ -241,11 +246,18 @@ Every setting is `CUEPILOT_<UPPER_SNAKE>`; the full reference is [`.env.example`
 ## Quality gates
 
 ```bash
-make check        # ruff + tsc (renderer and electron) + 64 tests
+make check        # ruff + tsc (renderer and electron) + 64 tests + docs gate
 make bench        # regenerate docs/metrics.json and docs/METRICS.md
 make measure-idle # desktop idle footprint -> desktop/bench/idle.json
 make metrics      # measure-idle, then bench
 ```
+
+`make check` runs the same steps as CI. The workflow in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) fans them out: the server suite on
+Python 3.11 and 3.12 against the locked `uv.lock`, the renderer typecheck and production
+build on Node 22, and a docs gate that parses every Mermaid diagram and resolves every
+relative link. `scripts/check-docs.mjs` uses mermaid's own grammar under jsdom, so a broken
+diagram fails the build instead of shipping as a broken image.
 
 Tests are hermetic: they point Postgres and Redis at `127.0.0.1:1`, so every fallback path
 runs on every invocation and health correctly reports `degraded`.
@@ -301,6 +313,8 @@ desktop/
   scripts/        measure-idle.cjs
 deploy/           pgvector schema, HNSW index, version row
 docs/             architecture · protocol · failure modes · generated metrics
+scripts/          check-docs.mjs (mermaid + link gate)
+.github/          CI: server matrix · desktop build · docs gate
 ```
 
 ---

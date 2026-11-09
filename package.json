@@ -1,0 +1,14 @@
+{
+  "name": "cuepilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Repository-level tooling for cuePilot (documentation gate)",
+  "type": "module",
+  "scripts": {
+    "check:docs": "node scripts/check-docs.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "mermaid": "^11.12.0"
+  }
+}

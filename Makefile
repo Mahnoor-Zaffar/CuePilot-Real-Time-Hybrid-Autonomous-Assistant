@@ -10,15 +10,15 @@ PIP := server/.venv/bin/pip
 RUFF := server/.venv/bin/ruff
 UVICORN := server/.venv/bin/uvicorn
 
-.PHONY: help setup setup-server setup-desktop up down logs dev server desktop test lint \
-        typecheck build bench seed metrics measure-idle check clean
+.PHONY: help setup setup-server setup-desktop setup-tools up down logs dev server desktop test lint \
+        typecheck build docs-check bench seed metrics measure-idle check clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 # ── setup ────────────────────────────────────────────────────────────────────
-setup: setup-server setup-desktop ## Install server and desktop dependencies
+setup: setup-server setup-desktop setup-tools ## Install server, desktop, and tooling dependencies
 	@test -f .env || (cp .env.example .env && echo "created .env from .env.example")
 
 setup-server: ## Create server/.venv and install deps
@@ -27,6 +27,9 @@ setup-server: ## Create server/.venv and install deps
 
 setup-desktop: ## Install desktop dependencies
 	cd desktop && npm install
+
+setup-tools: ## Install repository tooling (documentation gate)
+	npm install
 
 # ── infrastructure ───────────────────────────────────────────────────────────
 up: ## Start Postgres (pgvector) and Redis
@@ -70,7 +73,10 @@ typecheck: ## TypeScript typecheck for the desktop client
 build: ## Build the desktop production bundle
 	cd desktop && npm run build
 
-check: lint typecheck test ## Lint, typecheck, and test
+docs-check: ## Validate mermaid diagrams and relative links in docs
+	npm run check:docs
+
+check: lint typecheck test docs-check ## Lint, typecheck, test, and check docs
 
 # ── metrics ──────────────────────────────────────────────────────────────────
 bench: ## Regenerate docs/metrics.json (retrieval, TTFT, coalescing, bundle, idle)

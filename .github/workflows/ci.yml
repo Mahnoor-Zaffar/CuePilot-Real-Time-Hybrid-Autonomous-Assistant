@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A superseded push should not keep burning minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # CI never launches Electron; skip the ~100 MB binary download.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+jobs:
+  server:
+    name: server · py${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (locked)
+        working-directory: server
+        run: uv sync --frozen --extra dev --python ${{ matrix.python }}
+
+      - name: Lint
+        working-directory: server
+        run: .venv/bin/ruff check .
+
+      - name: Import check
+        working-directory: server
+        run: .venv/bin/python -c "from app.main import app; print(app.title)"
+
+      - name: Test
+        working-directory: server
+        run: .venv/bin/python -m pytest -q
+
+  desktop:
+    name: desktop · typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: desktop
+        run: npm run build
+
+      - name: Upload renderer bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-dist
+          path: desktop/dist
+          retention-days: 7
+          if-no-files-found: error
+
+  docs:
+    name: docs · diagrams + links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Check mermaid diagrams and relative links
+        run: npm run check:docs
