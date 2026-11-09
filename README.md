@@ -3,7 +3,8 @@
 [![CI](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/actions/workflows/ci.yml)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776ab?logo=python&logoColor=white)
 ![node](https://img.shields.io/badge/node-22-339933?logo=node.js&logoColor=white)
-![deps](https://img.shields.io/badge/deps-uv.lock%20%2B%20package--lock-6b7280)
+[![release](https://img.shields.io/github/v/release/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant)](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/releases/latest)
+[![gateway image](https://img.shields.io/badge/ghcr.io-gateway%20amd64%20%2B%20arm64-2496ed?logo=docker&logoColor=white)](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/pkgs/container/cuepilot-real-time-hybrid-autonomous-assistant)
 
 A real-time desktop copilot that streams grounded answers over a single full-duplex
 WebSocket. Electron/React client, FastAPI gateway, hybrid **BM25 + pgvector** retrieval,
@@ -32,6 +33,7 @@ product, not as edge cases.
 | **Backpressure** | Server coalesces to ~16 ms frames and drops frames, never text; client batches per animation frame |
 | **State** | Sessions hot in memory, mirrored to Redis; `kb_version` invalidates retrieval caches |
 | **Observability** | OTel spans plus an in-process trace ring at `/api/traces/{id}`; latency histograms at `/api/metrics` |
+| **Ships as** | Multi-arch gateway image on GHCR and signed-out macOS DMGs on the releases page |
 | **Runs offline** | No API key, no Docker, no model download required |
 
 ---
@@ -198,13 +200,42 @@ Every number is produced by running this code; none is hand-entered. Re-run with
 
 ## Quickstart
 
+Two ways in. Both run without an API key: the gateway falls back to the deterministic mock
+provider and the hash embedder, and still exercises retrieval, the tool loop, and streaming.
+
+### Try it without cloning
+
+The gateway image is published for `linux/amd64` and `linux/arm64`:
+
+```bash
+docker run --rm -p 8000:8000 \
+  ghcr.io/mahnoor-zaffar/cuepilot-real-time-hybrid-autonomous-assistant:latest
+```
+
+It boots degraded (in-process vector store, cache, bus) with no Postgres or Redis, seeds the
+62-chunk knowledge base, and is ready in about two seconds:
+
+```bash
+curl -s localhost:8000/api/health | jq '.status, .kb.chunks'
+# "degraded"
+# 62
+```
+
+The desktop client is a signed-out macOS build on the
+[releases page](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/releases/latest):
+`cuePilot-0.1.0-arm64.dmg` for Apple Silicon, `cuePilot-0.1.0.dmg` for Intel. It is not
+notarized, so the first launch needs **right-click → Open** (or
+`xattr -dr com.apple.quarantine /Applications/cuePilot.app`).
+
+### From source
+
 Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 20+. Docker is optional.
 
 ```bash
 git clone https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant.git
 cd CuePilot-Real-Time-Hybrid-Autonomous-Assistant
 
-make setup            # server/.venv + desktop/node_modules, creates .env
+make setup            # server/.venv + desktop/node_modules + tooling, creates .env
 docker compose up -d  # pgvector on 5433, Redis on 6380 (optional)
 make server           # gateway on http://127.0.0.1:8000
 make desktop          # Electron + Vite, second terminal
@@ -225,6 +256,13 @@ CUEPILOT_LLM_MODEL=openai/gpt-4o-mini
 
 The provider speaks the OpenAI chat-completions dialect, so any compatible endpoint works
 via `CUEPILOT_OPENROUTER_BASE_URL`.
+
+To build the container or the installer locally:
+
+```bash
+docker build -t cuepilot-gateway server/   # 82 MB, runs as uid 10001
+cd desktop && npm run package:mac          # -> release/cuePilot-0.1.0*.dmg
+```
 
 ### Configuration
 
@@ -258,6 +296,11 @@ Python 3.11 and 3.12 against the locked `uv.lock`, the renderer typecheck and pr
 build on Node 22, and a docs gate that parses every Mermaid diagram and resolves every
 relative link. `scripts/check-docs.mjs` uses mermaid's own grammar under jsdom, so a broken
 diagram fails the build instead of shipping as a broken image.
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) gates both artefacts on the
+test suite, then publishes the multi-arch image to GHCR and cross-builds both DMGs on
+`macos-15`. Pushing a `v*` tag turns that run into a GitHub Release with the installers
+attached — `v0.1.0` is the current one.
 
 Tests are hermetic: they point Postgres and Redis at `127.0.0.1:1`, so every fallback path
 runs on every invocation and health correctly reports `degraded`.
@@ -307,6 +350,7 @@ server/
     api/          health · KB ingest/search/stats · metrics · traces
   bench/          reproducible harness + 32 labelled queries
   tests/          64 tests
+  Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
 desktop/
   src/            React UI + useCueStream (the entire client transport)
   electron/       main process (hotkeys, clipboard, CSP) + contextBridge preload
@@ -314,7 +358,7 @@ desktop/
 deploy/           pgvector schema, HNSW index, version row
 docs/             architecture · protocol · failure modes · generated metrics
 scripts/          check-docs.mjs (mermaid + link gate)
-.github/          CI: server matrix · desktop build · docs gate
+.github/          CI (server matrix · desktop build · docs gate) and release (GHCR + dmg)
 ```
 
 ---
