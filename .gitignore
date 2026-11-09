@@ -1,0 +1,23 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# node
+node_modules/
+desktop/dist/
+desktop/dist-electron/
+desktop/release/
+
+# env / secrets
+.env
+.env.local
+
+# runtime artefacts
+*.log
+.DS_Store
