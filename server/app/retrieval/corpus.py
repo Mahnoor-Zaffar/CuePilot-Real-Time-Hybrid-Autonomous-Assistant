@@ -97,9 +97,11 @@ fused result carries per-retriever ranks and contributions so the UI can explain
 why a chunk surfaced.
 
 Candidate pools default to retrieval_candidate_k=50 per retriever and are fused
-down to retrieval_top_k=8. Retrieval results are cached in Redis for 120 seconds
-under a key that includes kb_version, so an ingest invalidates results without any
-explicit cache flush.
+down to retrieval_top_k=8. A single document may contribute at most
+retrieval_max_chunks_per_doc chunks (default 1) to the fused window, so one long
+document cannot fill every slot and crowd the answer out. Retrieval results are
+cached in Redis for 120 seconds under a key that includes kb_version, so an
+ingest invalidates results without any explicit cache flush.
 """,
     },
     {

@@ -38,8 +38,15 @@ def reciprocal_rank_fusion(
     k: int = 60,
     weights: dict[str, float] | None = None,
     top_k: int | None = None,
+    max_chunks_per_doc: int | None = None,
 ) -> list[FusedHit]:
-    """Merge ranked lists into one, preserving per-retriever provenance."""
+    """Merge ranked lists into one, preserving per-retriever provenance.
+
+    ``max_chunks_per_doc`` bounds how many chunks one document may contribute to
+    the result. Long documents are split into several chunks, and without a cap a
+    single document can occupy every slot in the top-k, pushing the actual answer
+    out of the window. The cap is applied after ranking and before truncation.
+    """
     weights = weights or {}
     fused: dict[str, FusedHit] = {}
     for retriever, results in ranked_lists.items():
@@ -55,6 +62,16 @@ def reciprocal_rank_fusion(
             entry.contributions[retriever] = contribution
             entry.raw_scores[retriever] = raw_score
     ordered = sorted(fused.values(), key=lambda h: (-h.score, h.chunk.id))
+    if max_chunks_per_doc is not None and max_chunks_per_doc > 0:
+        per_doc: dict[str, int] = {}
+        diversified: list[FusedHit] = []
+        for hit in ordered:
+            taken = per_doc.get(hit.chunk.doc_id, 0)
+            if taken >= max_chunks_per_doc:
+                continue
+            per_doc[hit.chunk.doc_id] = taken + 1
+            diversified.append(hit)
+        ordered = diversified
     if top_k is not None:
         ordered = ordered[:top_k]
     for hit in ordered:

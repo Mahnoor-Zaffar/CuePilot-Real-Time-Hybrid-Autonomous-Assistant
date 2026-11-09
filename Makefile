@@ -11,7 +11,7 @@ RUFF := server/.venv/bin/ruff
 UVICORN := server/.venv/bin/uvicorn
 
 .PHONY: help setup setup-server setup-desktop setup-tools up down logs dev server desktop test lint \
-        typecheck build docs-check bench seed metrics measure-idle check clean
+        typecheck build docs-check bench bench-semantic seed metrics measure-idle check clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -81,6 +81,9 @@ check: lint typecheck test docs-check ## Lint, typecheck, test, and check docs
 # ── metrics ──────────────────────────────────────────────────────────────────
 bench: ## Regenerate docs/metrics.json (retrieval, TTFT, coalescing, bundle, idle)
 	cd server && .venv/bin/python bench/run_bench.py --write
+
+bench-semantic: ## Retrieval benchmark with a real semantic embedder (needs the bench extra)
+	cd server && .venv/bin/python bench/run_bench.py --write --embedder local --out METRICS.semantic.md
 
 measure-idle: ## Measure desktop idle footprint into desktop/bench/idle.json
 	cd desktop && npm run measure-idle

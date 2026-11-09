@@ -1,6 +1,6 @@
 {
   "environment": {
-    "timestamp": "2026-11-09 17:18 UTC",
+    "timestamp": "2026-11-09 18:17 UTC",
     "python": "3.12.13",
     "platform": "Darwin x86_64",
     "provider": "mock (deterministic)",
@@ -9,19 +9,20 @@
   },
   "retrieval": {
     "bm25": {
-      "recall_at_5": 0.8667,
-      "mrr": 0.7556,
-      "hits": 26,
-      "n": 30,
+      "recall_at_5": 0.87,
+      "mrr": 0.7675,
+      "hits": 87,
+      "n": 100,
       "latency_ms": {
-        "count": 30,
-        "p50": 0.56,
-        "p95": 0.75,
-        "mean": 0.61
+        "count": 100,
+        "p50": 0.74,
+        "p95": 1.12,
+        "mean": 0.91
       },
       "by_family": {
         "identifier": 1.0,
-        "paraphrase": 0.75
+        "paraphrase": 0.7593,
+        "near_miss": 1.0
       },
       "per_query": [
         {
@@ -32,7 +33,7 @@
           ],
           "top_docs": [
             "kb-error-codes",
-            "kb-error-codes",
+            "kb-neg-error-index-v0",
             "kb-electron-hotkeys",
             "kb-sdk-typescript",
             "kb-audio-capture"
@@ -47,11 +48,11 @@
             "kb-rate-limits"
           ],
           "top_docs": [
+            "kb-error-codes",
             "kb-rate-limits",
-            "kb-error-codes",
-            "kb-error-codes",
+            "kb-audio-capture",
             "kb-websocket-reconnect",
-            "kb-audio-capture"
+            "kb-neg-error-index-v0"
           ],
           "rank": 1
         },
@@ -64,9 +65,55 @@
           "top_docs": [
             "kb-error-codes",
             "kb-audio-capture",
+            "kb-neg-error-index-v0",
+            "kb-electron-hotkeys",
+            "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E5032",
+          "family": "identifier",
+          "expected": [
+            "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
+            "kb-electron-hotkeys",
+            "kb-sdk-typescript",
+            "kb-audio-capture"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E6020",
+          "family": "identifier",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-neg-error-index-v0",
             "kb-error-codes",
             "kb-electron-hotkeys",
             "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E3010",
+          "family": "identifier",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
+            "kb-electron-hotkeys",
+            "kb-sdk-typescript",
+            "kb-audio-capture"
           ],
           "rank": 1
         },
@@ -80,8 +127,8 @@
             "kb-websocket-reconnect",
             "kb-rate-limits",
             "kb-error-codes",
-            "kb-session-state",
-            "kb-error-codes"
+            "kb-sdk-python",
+            "kb-neg-mobile-reconnect"
           ],
           "rank": 1
         },
@@ -92,13 +139,28 @@
             "kb-backpressure"
           ],
           "top_docs": [
-            "kb-deployment",
             "kb-backpressure",
+            "kb-deployment",
             "kb-telemetry",
-            "kb-distractor-workers-28",
-            "kb-billing"
+            "kb-sdk-typescript",
+            "kb-streaming-protocol"
           ],
-          "rank": 2
+          "rank": 1
+        },
+        {
+          "query": "delta_flush_ms",
+          "family": "identifier",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-tool-calling",
+            "kb-websocket-reconnect",
+            "kb-streaming-protocol",
+            "kb-audio-capture"
+          ],
+          "rank": 1
         },
         {
           "query": "tool_timeout_s",
@@ -109,11 +171,26 @@
           "top_docs": [
             "kb-error-codes",
             "kb-tool-calling",
-            "kb-distractor-workers-28",
-            "kb-tool-calling",
-            "kb-security"
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-sdk-python"
           ],
           "rank": 2
+        },
+        {
+          "query": "max_tool_iterations",
+          "family": "identifier",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-sdk-python"
+          ],
+          "rank": 1
         },
         {
           "query": "hnsw.ef_search",
@@ -123,10 +200,10 @@
           ],
           "top_docs": [
             "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
             "kb-tool-calling",
-            "kb-distractor-tuning-27",
             "kb-hybrid-retrieval",
-            "kb-distractor-ranking-17"
+            "kb-analytics-03"
           ],
           "rank": 1
         },
@@ -138,81 +215,9 @@
           ],
           "top_docs": [
             "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
             "kb-hybrid-retrieval",
-            "kb-pgvector-operations",
-            "kb-distractor-tuning-27",
             "kb-error-codes"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "transcription_model whisper-1",
-          "family": "identifier",
-          "expected": [
-            "kb-transcription"
-          ],
-          "top_docs": [
-            "kb-transcription",
-            "kb-hybrid-retrieval",
-            "kb-audio-capture",
-            "kb-billing",
-            "kb-audio-capture"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "CmdOrCtrl+Shift+Space",
-          "family": "identifier",
-          "expected": [
-            "kb-electron-hotkeys"
-          ],
-          "top_docs": [
-            "kb-electron-hotkeys"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "requestAnimationFrame batching",
-          "family": "identifier",
-          "expected": [
-            "kb-sdk-typescript",
-            "kb-frontend-performance"
-          ],
-          "top_docs": [
-            "kb-frontend-performance",
-            "kb-sdk-typescript",
-            "kb-streaming-protocol",
-            "kb-backpressure",
-            "kb-streaming-protocol"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "turn_history_limit",
-          "family": "identifier",
-          "expected": [
-            "kb-session-state",
-            "kb-billing"
-          ],
-          "top_docs": [
-            "kb-session-state",
-            "kb-error-codes",
-            "kb-billing",
-            "kb-cancellation",
-            "kb-distractor-shaping-34"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "llm_fallback_models",
-          "family": "identifier",
-          "expected": [
-            "kb-rate-limits"
-          ],
-          "top_docs": [
-            "kb-rate-limits",
-            "kb-error-codes",
-            "kb-telemetry"
           ],
           "rank": 1
         },
@@ -232,65 +237,332 @@
           "rank": 1
         },
         {
+          "query": "retrieval_candidate_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-telemetry",
+            "kb-billing",
+            "kb-tool-calling",
+            "kb-neg-relevance-experiments"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "rrf_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "turn_history_limit",
+          "family": "identifier",
+          "expected": [
+            "kb-session-state",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "session_ttl_s",
+          "family": "identifier",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-websocket-reconnect",
+            "kb-analytics-19",
+            "kb-analytics-07",
+            "kb-analytics-11"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "transcription_model whisper-1",
+          "family": "identifier",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-neg-transcription-vendor",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "audio_window_ms",
+          "family": "identifier",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-transcription",
+            "kb-neg-transcription-vendor",
+            "kb-websocket-reconnect",
+            "kb-electron-hotkeys"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CmdOrCtrl+Shift+Space",
+          "family": "identifier",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-neg-desktop-budget-legacy"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "requestAnimationFrame batching",
+          "family": "identifier",
+          "expected": [
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-neg-desktop-budget-legacy",
+            "kb-frontend-performance",
+            "kb-sdk-typescript",
+            "kb-streaming-protocol",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "llm_fallback_models",
+          "family": "identifier",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-neg-relevance-experiments",
+            "kb-neg-desktop-budget-legacy",
+            "kb-error-codes",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "provider_fallbacks",
+          "family": "identifier",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-neg-provider-outage",
+            "kb-audio-capture",
+            "kb-error-codes",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "ws_max_message_bytes",
+          "family": "identifier",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-deployment",
+            "kb-streaming-protocol",
+            "kb-hybrid-retrieval",
+            "kb-tool-calling"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "retrieval_top_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-telemetry",
+            "kb-tool-calling"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "cue:context IPC",
+          "family": "identifier",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-error-codes",
+            "kb-sdk-python",
+            "kb-billing",
+            "kb-neg-error-index-v0"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "/api/traces/{trace_id}",
+          "family": "identifier",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-telemetry",
+            "kb-billing",
+            "kb-cancellation",
+            "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "allow_degraded_infra",
+          "family": "identifier",
+          "expected": [
+            "kb-pgvector-operations",
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-deployment",
+            "kb-billing",
+            "kb-neg-provider-outage",
+            "kb-neg-vector-bakeoff"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "kb_search tool",
+          "family": "identifier",
+          "expected": [
+            "kb-tool-calling",
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-error-codes",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what order do messages arrive in during one answer",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-a11y-12",
+            "kb-frontend-performance",
+            "kb-hybrid-retrieval",
+            "kb-a11y-04",
+            "kb-session-state"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how does the client know an answer is finished",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-neg-legacy-protocol",
+            "kb-frontend-performance",
+            "kb-hybrid-retrieval",
+            "kb-versioning-15",
+            "kb-versioning-03"
+          ],
+          "rank": null
+        },
+        {
+          "query": "which message types can the browser send to the server",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-streaming-protocol",
+            "kb-backpressure",
+            "kb-deployment",
+            "kb-audio-capture"
+          ],
+          "rank": 2
+        },
+        {
           "query": "how do I stop every desktop client reconnecting at the same time",
           "family": "paraphrase",
           "expected": [
             "kb-websocket-reconnect"
           ],
           "top_docs": [
+            "kb-neg-desktop-budget-legacy",
             "kb-rate-limits",
             "kb-websocket-reconnect",
             "kb-sdk-python",
-            "kb-electron-hotkeys",
-            "kb-distractor-backup-12"
+            "kb-neg-transcription-vendor"
           ],
-          "rank": 2
+          "rank": 3
         },
         {
-          "query": "what happens when the model provider says too many requests",
+          "query": "what happens when the connection silently dies",
           "family": "paraphrase",
           "expected": [
-            "kb-rate-limits"
+            "kb-websocket-reconnect"
           ],
           "top_docs": [
-            "kb-error-codes",
-            "kb-pgvector-operations",
-            "kb-telemetry",
-            "kb-transcription",
+            "kb-audio-capture",
+            "kb-deployment",
+            "kb-cancellation",
+            "kb-session-state",
             "kb-billing"
           ],
           "rank": null
         },
         {
-          "query": "how are microphone recordings turned into text",
+          "query": "how long does the client wait between reconnection attempts",
           "family": "paraphrase",
           "expected": [
-            "kb-transcription",
-            "kb-audio-capture"
+            "kb-websocket-reconnect"
           ],
           "top_docs": [
-            "kb-tool-calling",
-            "kb-tool-calling",
-            "kb-frontend-performance",
-            "kb-security",
-            "kb-backpressure"
+            "kb-error-codes",
+            "kb-sdk-typescript",
+            "kb-streaming-protocol",
+            "kb-rate-limits",
+            "kb-neg-desktop-budget-legacy"
           ],
           "rank": null
-        },
-        {
-          "query": "how do I cancel an answer that is already streaming",
-          "family": "paraphrase",
-          "expected": [
-            "kb-cancellation"
-          ],
-          "top_docs": [
-            "kb-frontend-performance",
-            "kb-cancellation",
-            "kb-electron-hotkeys",
-            "kb-streaming-protocol",
-            "kb-streaming-protocol"
-          ],
-          "rank": 2
         },
         {
           "query": "why would semantic search return nothing at all",
@@ -301,115 +573,403 @@
           ],
           "top_docs": [
             "kb-electron-hotkeys",
-            "kb-distractor-semantic-33",
             "kb-hybrid-retrieval",
-            "kb-distractor-ranking-17",
-            "kb-distractor-analytics-06"
+            "kb-neg-transcription-vendor",
+            "kb-neg-provider-outage",
+            "kb-backpressure"
           ],
-          "rank": 3
+          "rank": 2
         },
         {
-          "query": "how much memory should the desktop app use while sitting idle",
+          "query": "what does it mean when the model input is too long",
           "family": "paraphrase",
           "expected": [
-            "kb-frontend-performance"
+            "kb-error-codes"
           ],
           "top_docs": [
-            "kb-frontend-performance",
-            "kb-session-state",
-            "kb-deployment",
-            "kb-electron-hotkeys",
-            "kb-pgvector-operations"
+            "kb-error-codes",
+            "kb-tool-calling",
+            "kb-neg-provider-outage",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval"
           ],
           "rank": 1
         },
         {
-          "query": "how does the server avoid flooding a slow client with tokens",
+          "query": "how are keyword and vector results combined",
           "family": "paraphrase",
           "expected": [
-            "kb-backpressure"
+            "kb-hybrid-retrieval"
           ],
           "top_docs": [
-            "kb-frontend-performance",
-            "kb-transcription",
-            "kb-streaming-protocol",
-            "kb-streaming-protocol",
-            "kb-sdk-python"
+            "kb-error-codes",
+            "kb-neg-vector-bakeoff",
+            "kb-hybrid-retrieval",
+            "kb-neg-relevance-experiments",
+            "kb-pgvector-operations"
           ],
-          "rank": null
+          "rank": 3
         },
         {
-          "query": "how do I run the gateway across several servers",
+          "query": "why not use a cross encoder to rerank the candidates",
           "family": "paraphrase",
           "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-electron-hotkeys",
+            "kb-rate-limits",
+            "kb-pgvector-operations",
+            "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how long are search results cached for",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-billing",
+            "kb-tool-calling",
+            "kb-neg-relevance-experiments",
+            "kb-neg-transcription-vendor"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how do I make the vector index work harder for better recall",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-neg-error-index-v0",
+            "kb-neg-relevance-experiments",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what should I run after a large re-ingest",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-audio-capture",
+            "kb-streaming-protocol",
+            "kb-hybrid-retrieval",
+            "kb-neg-vector-bakeoff"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what happens to search if postgres is down",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations",
             "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-neg-autoscaling",
+            "kb-hybrid-retrieval",
+            "kb-deployment",
+            "kb-analytics-03",
+            "kb-analytics-08"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "how much conversation history goes into the prompt",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-neg-mobile-reconnect",
+            "kb-websocket-reconnect",
+            "kb-billing",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "where is conversation state kept so a reconnect works",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
           ],
           "top_docs": [
             "kb-websocket-reconnect",
-            "kb-audio-capture",
-            "kb-error-codes",
-            "kb-rate-limits",
-            "kb-pgvector-operations"
+            "kb-session-state",
+            "kb-neg-mobile-reconnect",
+            "kb-streaming-protocol",
+            "kb-neg-desktop-budget-legacy"
           ],
-          "rank": null
+          "rank": 2
         },
         {
-          "query": "protecting the assistant from instructions hidden inside documents",
+          "query": "how often is session state written to redis",
           "family": "paraphrase",
           "expected": [
-            "kb-security"
+            "kb-session-state"
           ],
           "top_docs": [
-            "kb-tool-calling",
+            "kb-session-state",
+            "kb-deployment",
+            "kb-websocket-reconnect",
+            "kb-cancellation",
+            "kb-analytics-03"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how do I cancel an answer that is already streaming",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation"
+          ],
+          "top_docs": [
             "kb-frontend-performance",
-            "kb-security",
-            "kb-backpressure",
-            "kb-websocket-reconnect"
+            "kb-export-01",
+            "kb-cancellation",
+            "kb-export-09",
+            "kb-hybrid-retrieval"
           ],
           "rank": 3
         },
         {
-          "query": "what gets billed when a stream is cancelled halfway",
+          "query": "what happens if I send a new question while one is running",
           "family": "paraphrase",
           "expected": [
+            "kb-cancellation"
+          ],
+          "top_docs": [
+            "kb-telemetry",
+            "kb-deployment",
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": null
+        },
+        {
+          "query": "does cancelling stop the provider charging me",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation",
             "kb-billing"
           ],
           "top_docs": [
-            "kb-billing",
-            "kb-electron-hotkeys",
+            "kb-rate-limits",
+            "kb-cancellation",
+            "kb-neg-provider-outage",
             "kb-error-codes",
-            "kb-sdk-typescript",
+            "kb-streaming-protocol"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "what happens when the model provider says too many requests",
+          "family": "paraphrase",
+          "expected": [
             "kb-rate-limits"
           ],
-          "rank": 1
+          "top_docs": [
+            "kb-neg-provider-outage",
+            "kb-error-codes",
+            "kb-telemetry",
+            "kb-pgvector-operations",
+            "kb-transcription"
+          ],
+          "rank": null
         },
         {
-          "query": "python library usage example",
+          "query": "when does the gateway switch to a different model",
           "family": "paraphrase",
           "expected": [
-            "kb-sdk-python"
+            "kb-rate-limits"
           ],
           "top_docs": [
-            "kb-sdk-python",
-            "kb-billing",
             "kb-error-codes",
-            "kb-error-codes",
-            "kb-deployment"
+            "kb-neg-provider-outage",
+            "kb-neg-legacy-protocol",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval"
           ],
-          "rank": 1
+          "rank": null
         },
         {
-          "query": "react hook that batches incoming tokens",
+          "query": "why won't it retry in the middle of a response",
           "family": "paraphrase",
           "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-incident-11",
+            "kb-incident-16",
+            "kb-incident-01",
+            "kb-incident-06",
+            "kb-incident-04"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how many rounds of tool use are allowed",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-pgvector-operations",
+            "kb-error-codes",
+            "kb-security",
             "kb-sdk-typescript"
           ],
+          "rank": 1
+        },
+        {
+          "query": "what happens when a tool takes too long",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
           "top_docs": [
+            "kb-cancellation",
             "kb-sdk-typescript",
-            "kb-billing",
-            "kb-frontend-performance",
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "why expose search as a tool instead of doing it up front",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-neg-error-index-v0",
+            "kb-tool-calling",
+            "kb-streaming-protocol",
+            "kb-sdk-typescript",
+            "kb-backpressure"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "what does the desktop app read from the clipboard",
+          "family": "paraphrase",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-neg-mobile-reconnect",
+            "kb-electron-hotkeys",
+            "kb-security",
             "kb-sdk-python",
-            "kb-cancellation"
+            "kb-neg-desktop-budget-legacy"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how does the renderer avoid getting node access",
+          "family": "paraphrase",
+          "expected": [
+            "kb-electron-hotkeys",
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-frontend-performance",
+            "kb-neg-prompt-guide",
+            "kb-sdk-typescript",
+            "kb-neg-autoscaling"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how are microphone recordings turned into text",
+          "family": "paraphrase",
+          "expected": [
+            "kb-transcription",
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-neg-audio-codec",
+            "kb-frontend-performance",
+            "kb-security",
+            "kb-backpressure"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what audio format is sent over the socket",
+          "family": "paraphrase",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-streaming-protocol",
+            "kb-security",
+            "kb-neg-transcription-vendor",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how large is the rolling audio buffer",
+          "family": "paraphrase",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-streaming-protocol",
+            "kb-transcription",
+            "kb-neg-transcription-vendor",
+            "kb-frontend-performance"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how are partial captions produced",
+          "family": "paraphrase",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-neg-relevance-experiments",
+            "kb-neg-transcription-vendor",
+            "kb-neg-provider-outage"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how far behind speech do the captions lag",
+          "family": "paraphrase",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-neg-cost-governance",
+            "kb-neg-desktop-budget-legacy",
+            "kb-neg-transcription-vendor",
+            "kb-neg-audio-codec"
           ],
           "rank": 1
         },
@@ -429,66 +989,560 @@
           "rank": 1
         },
         {
-          "query": "what does the desktop app read from the clipboard",
+          "query": "when does the first token timer start",
           "family": "paraphrase",
           "expected": [
-            "kb-electron-hotkeys"
+            "kb-telemetry"
           ],
           "top_docs": [
-            "kb-electron-hotkeys",
-            "kb-security",
-            "kb-sdk-python",
+            "kb-neg-desktop-budget-legacy",
+            "kb-backpressure",
+            "kb-neg-legacy-protocol",
+            "kb-streaming-protocol",
+            "kb-rate-limits"
+          ],
+          "rank": null
+        },
+        {
+          "query": "which spans are recorded for a turn",
+          "family": "paraphrase",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-telemetry",
+            "kb-cancellation",
             "kb-session-state",
+            "kb-billing",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how do I run the gateway across several servers",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-a11y-04",
+            "kb-a11y-14",
+            "kb-a11y-19",
+            "kb-i18n-03",
+            "kb-i18n-08"
+          ],
+          "rank": null
+        },
+        {
+          "query": "do I need sticky sessions",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-neg-mobile-reconnect",
+            "kb-session-state"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what does a replica do if redis disappears",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-session-state",
+            "kb-cancellation",
+            "kb-hybrid-retrieval",
+            "kb-websocket-reconnect"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "protecting the assistant from instructions hidden inside documents",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-neg-transcription-vendor",
+            "kb-frontend-performance",
+            "kb-security",
+            "kb-backpressure"
+          ],
+          "rank": 4
+        },
+        {
+          "query": "how do clients authenticate to the socket",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-security",
+            "kb-session-state",
+            "kb-websocket-reconnect",
+            "kb-streaming-protocol",
+            "kb-neg-mobile-reconnect"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "can retrieved text trigger a tool call",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-security",
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-backpressure",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what gets billed when a stream is cancelled halfway",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-error-codes",
+            "kb-electron-hotkeys",
+            "kb-cancellation",
             "kb-sdk-typescript"
           ],
           "rank": 1
         },
         {
-          "query": "splitting camelCase and snake_case identifiers for search",
+          "query": "what happens when a workspace runs out of budget",
           "family": "paraphrase",
           "expected": [
-            "kb-hybrid-retrieval"
+            "kb-billing"
           ],
           "top_docs": [
-            "kb-hybrid-retrieval",
-            "kb-distractor-ranking-17",
-            "kb-distractor-analytics-06",
-            "kb-tool-calling",
-            "kb-distractor-tuning-27"
+            "kb-onboarding-12",
+            "kb-onboarding-02",
+            "kb-onboarding-07",
+            "kb-onboarding-17",
+            "kb-onboarding-04"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what actually drives the cost of a turn",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-session-state",
+            "kb-telemetry",
+            "kb-cancellation",
+            "kb-neg-cost-governance"
           ],
           "rank": 1
         },
         {
-          "query": "exponential backoff with jitter on reconnect",
+          "query": "python library usage example",
           "family": "paraphrase",
+          "expected": [
+            "kb-sdk-python"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-sdk-python",
+            "kb-error-codes",
+            "kb-deployment"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how does the python sdk handle reconnects",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-python"
+          ],
+          "top_docs": [
+            "kb-sdk-python",
+            "kb-neg-mobile-reconnect",
+            "kb-sdk-typescript",
+            "kb-deployment",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "react hook that batches incoming tokens",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-typescript"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-billing",
+            "kb-frontend-performance",
+            "kb-sdk-python",
+            "kb-cancellation"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "can the typescript client run outside electron",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-typescript"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-neg-desktop-budget-legacy",
+            "kb-electron-hotkeys",
+            "kb-versioning-11",
+            "kb-security"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how much memory should the desktop app use while sitting idle",
+          "family": "paraphrase",
+          "expected": [
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-neg-mobile-reconnect",
+            "kb-electron-hotkeys",
+            "kb-frontend-performance",
+            "kb-session-state",
+            "kb-deployment"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "why is markdown parsing expensive while streaming",
+          "family": "paraphrase",
+          "expected": [
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-export-01",
+            "kb-export-09",
+            "kb-export-13",
+            "kb-export-17"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how does the server avoid flooding a slow client with tokens",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-streaming-protocol",
+            "kb-sdk-python",
+            "kb-websocket-reconnect",
+            "kb-billing"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what happens to tokens when the send queue is full",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-deployment",
+            "kb-rate-limits",
+            "kb-billing",
+            "kb-frontend-performance"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how many frames per second does the server emit",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-streaming-protocol",
+            "kb-tool-calling",
+            "kb-transcription"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "CUE-E1042 context window exceeded",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-electron-hotkeys",
+            "kb-sdk-python",
+            "kb-billing",
+            "kb-neg-error-index-v0"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E2041 provider rate limit",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes",
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-rate-limits",
+            "kb-neg-error-index-v0",
+            "kb-neg-provider-outage",
+            "kb-billing"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E5032 tool timeout",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
+            "kb-tool-calling",
+            "kb-sdk-python",
+            "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E6020 workspace budget",
+          "family": "near_miss",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-neg-error-index-v0",
+            "kb-error-codes",
+            "kb-electron-hotkeys",
+            "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "retry_backoff_cap_ms reconnect delay",
+          "family": "near_miss",
           "expected": [
             "kb-websocket-reconnect"
           ],
           "top_docs": [
             "kb-websocket-reconnect",
-            "kb-error-codes",
+            "kb-neg-mobile-reconnect",
+            "kb-session-state",
             "kb-rate-limits",
-            "kb-streaming-protocol",
-            "kb-session-state"
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "tool_timeout_s tool dispatch",
+          "family": "near_miss",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-billing"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "delta_flush_ms coalescing window",
+          "family": "near_miss",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-audio-capture",
+            "kb-tool-calling",
+            "kb-websocket-reconnect",
+            "kb-a11y-02"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "ws_send_queue_size send queue",
+          "family": "near_miss",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-deployment",
+            "kb-telemetry",
+            "kb-sdk-typescript",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "hnsw.ef_search recall tradeoff",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-neg-relevance-experiments",
+            "kb-tool-calling",
+            "kb-hybrid-retrieval"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "vector_cosine_ops index operator class",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-hybrid-retrieval",
+            "kb-neg-error-index-v0",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "turn_history_limit prompt messages",
+          "family": "near_miss",
+          "expected": [
+            "kb-session-state",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "whisper-1 transcription model",
+          "family": "near_miss",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-neg-transcription-vendor",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CmdOrCtrl+Shift+Space global shortcut",
+          "family": "near_miss",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-neg-desktop-budget-legacy"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "max_tool_iterations tool rounds",
+          "family": "near_miss",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-sdk-python"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "requestAnimationFrame delta batching",
+          "family": "near_miss",
+          "expected": [
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-neg-desktop-budget-legacy",
+            "kb-frontend-performance",
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-streaming-protocol"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "kb_meta.version cache invalidation",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-hybrid-retrieval",
+            "kb-telemetry",
+            "kb-session-state",
+            "kb-websocket-reconnect"
           ],
           "rank": 1
         }
       ]
     },
     "dense": {
-      "recall_at_5": 0.8333,
-      "mrr": 0.7567,
-      "hits": 25,
-      "n": 30,
+      "recall_at_5": 0.83,
+      "mrr": 0.7328,
+      "hits": 83,
+      "n": 100,
       "latency_ms": {
-        "count": 30,
-        "p50": 1.09,
-        "p95": 1.38,
-        "mean": 1.31
+        "count": 100,
+        "p50": 1.36,
+        "p95": 1.67,
+        "mean": 2.07
       },
       "by_family": {
         "identifier": 1.0,
-        "paraphrase": 0.6875
+        "paraphrase": 0.7037,
+        "near_miss": 0.9375
       },
       "per_query": [
         {
@@ -499,10 +1553,10 @@
           ],
           "top_docs": [
             "kb-error-codes",
-            "kb-error-codes",
-            "kb-distractor-webhook-05",
-            "kb-pgvector-operations",
-            "kb-session-state"
+            "kb-neg-error-index-v0",
+            "kb-a11y-16",
+            "kb-capacity-04",
+            "kb-webhook-08"
           ],
           "rank": 1
         },
@@ -516,9 +1570,9 @@
           "top_docs": [
             "kb-rate-limits",
             "kb-error-codes",
-            "kb-distractor-audit-11",
-            "kb-distractor-evals-25",
-            "kb-distractor-support-22"
+            "kb-backup-07",
+            "kb-a11y-17",
+            "kb-backup-12"
           ],
           "rank": 1
         },
@@ -531,9 +1585,55 @@
           "top_docs": [
             "kb-error-codes",
             "kb-audio-capture",
+            "kb-neg-error-index-v0",
+            "kb-versioning-10",
+            "kb-versioning-18"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E5032",
+          "family": "identifier",
+          "expected": [
             "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
             "kb-billing",
-            "kb-distractor-residency-24"
+            "kb-audio-capture",
+            "kb-a11y-19"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E6020",
+          "family": "identifier",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-neg-error-index-v0",
+            "kb-error-codes",
+            "kb-transcription",
+            "kb-rate-limits"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E3010",
+          "family": "identifier",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-flags-19",
+            "kb-neg-relevance-experiments",
+            "kb-audio-capture",
+            "kb-neg-prompt-guide"
           ],
           "rank": 1
         },
@@ -545,10 +1645,10 @@
           ],
           "top_docs": [
             "kb-websocket-reconnect",
+            "kb-audit-05",
+            "kb-audit-15",
             "kb-rate-limits",
-            "kb-distractor-audit-11",
-            "kb-error-codes",
-            "kb-session-state"
+            "kb-audit-03"
           ],
           "rank": 1
         },
@@ -561,9 +1661,24 @@
           "top_docs": [
             "kb-backpressure",
             "kb-deployment",
-            "kb-telemetry",
-            "kb-audio-capture",
-            "kb-distractor-versioning-15"
+            "kb-mobile-06",
+            "kb-webhook-14",
+            "kb-versioning-04"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "delta_flush_ms",
+          "family": "identifier",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-streaming-protocol",
+            "kb-incident-16",
+            "kb-websocket-reconnect",
+            "kb-incident-01"
           ],
           "rank": 1
         },
@@ -576,11 +1691,26 @@
           "top_docs": [
             "kb-error-codes",
             "kb-tool-calling",
-            "kb-tool-calling",
-            "kb-rate-limits",
-            "kb-telemetry"
+            "kb-i18n-16",
+            "kb-keys-08",
+            "kb-i18n-11"
           ],
           "rank": 2
+        },
+        {
+          "query": "max_tool_iterations",
+          "family": "identifier",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-keys-14",
+            "kb-keys-19",
+            "kb-security",
+            "kb-i18n-07"
+          ],
+          "rank": 1
         },
         {
           "query": "hnsw.ef_search",
@@ -590,10 +1720,10 @@
           ],
           "top_docs": [
             "kb-pgvector-operations",
-            "kb-distractor-tuning-27",
-            "kb-distractor-analytics-06",
-            "kb-distractor-ranking-17",
-            "kb-tool-calling"
+            "kb-neg-vector-bakeoff",
+            "kb-analytics-14",
+            "kb-analytics-04",
+            "kb-analytics-09"
           ],
           "rank": 1
         },
@@ -605,87 +1735,10 @@
           ],
           "top_docs": [
             "kb-pgvector-operations",
-            "kb-pgvector-operations",
             "kb-hybrid-retrieval",
-            "kb-error-codes",
-            "kb-distractor-tuning-27"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "transcription_model whisper-1",
-          "family": "identifier",
-          "expected": [
-            "kb-transcription"
-          ],
-          "top_docs": [
-            "kb-transcription",
-            "kb-audio-capture",
-            "kb-hybrid-retrieval",
-            "kb-websocket-reconnect",
-            "kb-audio-capture"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "CmdOrCtrl+Shift+Space",
-          "family": "identifier",
-          "expected": [
-            "kb-electron-hotkeys"
-          ],
-          "top_docs": [
-            "kb-electron-hotkeys",
-            "kb-streaming-protocol",
-            "kb-audio-capture",
-            "kb-websocket-reconnect",
-            "kb-audio-capture"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "requestAnimationFrame batching",
-          "family": "identifier",
-          "expected": [
-            "kb-sdk-typescript",
-            "kb-frontend-performance"
-          ],
-          "top_docs": [
-            "kb-frontend-performance",
-            "kb-sdk-typescript",
-            "kb-distractor-audit-11",
-            "kb-audio-capture",
-            "kb-error-codes"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "turn_history_limit",
-          "family": "identifier",
-          "expected": [
-            "kb-session-state",
-            "kb-billing"
-          ],
-          "top_docs": [
-            "kb-session-state",
-            "kb-error-codes",
-            "kb-billing",
-            "kb-cancellation",
-            "kb-telemetry"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "llm_fallback_models",
-          "family": "identifier",
-          "expected": [
-            "kb-rate-limits"
-          ],
-          "top_docs": [
-            "kb-rate-limits",
-            "kb-websocket-reconnect",
-            "kb-error-codes",
-            "kb-electron-hotkeys",
-            "kb-tool-calling"
+            "kb-onboarding-13",
+            "kb-storage-11",
+            "kb-storage-06"
           ],
           "rank": 1
         },
@@ -705,19 +1758,552 @@
           "rank": 1
         },
         {
+          "query": "retrieval_candidate_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-telemetry",
+            "kb-neg-audio-codec",
+            "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "rrf_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-analytics-03",
+            "kb-export-10",
+            "kb-flags-04",
+            "kb-onboarding-18"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "turn_history_limit",
+          "family": "identifier",
+          "expected": [
+            "kb-session-state",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-error-codes",
+            "kb-billing",
+            "kb-cancellation",
+            "kb-webhook-04"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "session_ttl_s",
+          "family": "identifier",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-deployment",
+            "kb-analytics-03",
+            "kb-telemetry",
+            "kb-incident-18"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "transcription_model whisper-1",
+          "family": "identifier",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-audio-capture",
+            "kb-keys-04",
+            "kb-hybrid-retrieval",
+            "kb-websocket-reconnect"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "audio_window_ms",
+          "family": "identifier",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-neg-transcription-vendor",
+            "kb-audit-08",
+            "kb-audit-03",
+            "kb-audit-13"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CmdOrCtrl+Shift+Space",
+          "family": "identifier",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-neg-desktop-budget-legacy",
+            "kb-neg-legacy-protocol",
+            "kb-streaming-protocol",
+            "kb-audio-capture"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "requestAnimationFrame batching",
+          "family": "identifier",
+          "expected": [
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-sdk-typescript",
+            "kb-audit-16",
+            "kb-audit-08",
+            "kb-audit-13"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "llm_fallback_models",
+          "family": "identifier",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-neg-desktop-budget-legacy",
+            "kb-websocket-reconnect",
+            "kb-neg-mobile-reconnect",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "provider_fallbacks",
+          "family": "identifier",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-neg-provider-outage",
+            "kb-error-codes",
+            "kb-backup-06",
+            "kb-billing"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "ws_max_message_bytes",
+          "family": "identifier",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-session-state",
+            "kb-neg-relevance-experiments",
+            "kb-attribution-10",
+            "kb-hybrid-retrieval"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "retrieval_top_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-neg-legacy-protocol",
+            "kb-analytics-05"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "cue:context IPC",
+          "family": "identifier",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-error-codes",
+            "kb-sdk-python",
+            "kb-security",
+            "kb-neg-error-index-v0"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "/api/traces/{trace_id}",
+          "family": "identifier",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-telemetry",
+            "kb-versioning-00",
+            "kb-versioning-20",
+            "kb-versioning-17",
+            "kb-versioning-07"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "allow_degraded_infra",
+          "family": "identifier",
+          "expected": [
+            "kb-pgvector-operations",
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-a11y-01",
+            "kb-mobile-10",
+            "kb-mobile-05",
+            "kb-mobile-15"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "kb_search tool",
+          "family": "identifier",
+          "expected": [
+            "kb-tool-calling",
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-pgvector-operations",
+            "kb-error-codes",
+            "kb-analytics-14",
+            "kb-analytics-19"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what order do messages arrive in during one answer",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-a11y-12",
+            "kb-i18n-11",
+            "kb-attribution-12",
+            "kb-storage-07",
+            "kb-a11y-07"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how does the client know an answer is finished",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-versioning-14",
+            "kb-versioning-19",
+            "kb-storage-12",
+            "kb-storage-07",
+            "kb-frontend-performance"
+          ],
+          "rank": null
+        },
+        {
+          "query": "which message types can the browser send to the server",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-streaming-protocol",
+            "kb-audio-capture",
+            "kb-email-14",
+            "kb-a11y-17"
+          ],
+          "rank": 2
+        },
+        {
           "query": "how do I stop every desktop client reconnecting at the same time",
           "family": "paraphrase",
           "expected": [
             "kb-websocket-reconnect"
           ],
           "top_docs": [
+            "kb-neg-desktop-budget-legacy",
             "kb-websocket-reconnect",
             "kb-rate-limits",
             "kb-streaming-protocol",
-            "kb-streaming-protocol",
             "kb-sdk-python"
           ],
+          "rank": 2
+        },
+        {
+          "query": "what happens when the connection silently dies",
+          "family": "paraphrase",
+          "expected": [
+            "kb-websocket-reconnect"
+          ],
+          "top_docs": [
+            "kb-webhook-18",
+            "kb-storage-04",
+            "kb-keys-15",
+            "kb-storage-19",
+            "kb-keys-10"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how long does the client wait between reconnection attempts",
+          "family": "paraphrase",
+          "expected": [
+            "kb-websocket-reconnect"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-audio-capture",
+            "kb-cancellation",
+            "kb-streaming-protocol",
+            "kb-websocket-reconnect"
+          ],
+          "rank": 5
+        },
+        {
+          "query": "why would semantic search return nothing at all",
+          "family": "paraphrase",
+          "expected": [
+            "kb-error-codes",
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-analytics-03",
+            "kb-analytics-18",
+            "kb-analytics-08",
+            "kb-analytics-15",
+            "kb-analytics-13"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what does it mean when the model input is too long",
+          "family": "paraphrase",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-tool-calling",
+            "kb-neg-provider-outage",
+            "kb-audit-18",
+            "kb-mobile-11"
+          ],
           "rank": 1
+        },
+        {
+          "query": "how are keyword and vector results combined",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-pgvector-operations",
+            "kb-tool-calling",
+            "kb-neg-autoscaling",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "why not use a cross encoder to rerank the candidates",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-electron-hotkeys",
+            "kb-versioning-19",
+            "kb-versioning-14",
+            "kb-versioning-07"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how long are search results cached for",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-tool-calling",
+            "kb-analytics-18",
+            "kb-analytics-13",
+            "kb-analytics-08"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how do I make the vector index work harder for better recall",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-error-codes",
+            "kb-neg-vector-bakeoff",
+            "kb-versioning-11",
+            "kb-versioning-15"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what should I run after a large re-ingest",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-a11y-01",
+            "kb-analytics-12",
+            "kb-i18n-10",
+            "kb-capacity-04"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what happens to search if postgres is down",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations",
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-webhook-18",
+            "kb-analytics-03",
+            "kb-analytics-18",
+            "kb-analytics-13",
+            "kb-analytics-08"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how much conversation history goes into the prompt",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-storage-03",
+            "kb-storage-08",
+            "kb-storage-11",
+            "kb-storage-18"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "where is conversation state kept so a reconnect works",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-websocket-reconnect",
+            "kb-neg-mobile-reconnect",
+            "kb-session-state",
+            "kb-streaming-protocol",
+            "kb-deployment"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "how often is session state written to redis",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-analytics-03",
+            "kb-session-state",
+            "kb-frontend-performance",
+            "kb-a11y-02"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "how do I cancel an answer that is already streaming",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation"
+          ],
+          "top_docs": [
+            "kb-export-01",
+            "kb-frontend-performance",
+            "kb-export-09",
+            "kb-billing-09",
+            "kb-billing-14"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what happens if I send a new question while one is running",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation"
+          ],
+          "top_docs": [
+            "kb-webhook-14",
+            "kb-pgvector-operations",
+            "kb-deployment",
+            "kb-versioning-09",
+            "kb-mobile-06"
+          ],
+          "rank": null
+        },
+        {
+          "query": "does cancelling stop the provider charging me",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-neg-provider-outage",
+            "kb-billing-13",
+            "kb-billing-17",
+            "kb-cancellation",
+            "kb-streaming-protocol"
+          ],
+          "rank": 4
         },
         {
           "query": "what happens when the model provider says too many requests",
@@ -726,13 +2312,119 @@
             "kb-rate-limits"
           ],
           "top_docs": [
+            "kb-neg-provider-outage",
+            "kb-webhook-18",
             "kb-error-codes",
-            "kb-rate-limits",
+            "kb-i18n-16",
+            "kb-backup-02"
+          ],
+          "rank": null
+        },
+        {
+          "query": "when does the gateway switch to a different model",
+          "family": "paraphrase",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-audio-capture",
+            "kb-neg-provider-outage",
+            "kb-hybrid-retrieval",
+            "kb-security"
+          ],
+          "rank": null
+        },
+        {
+          "query": "why won't it retry in the middle of a response",
+          "family": "paraphrase",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-incident-06",
+            "kb-incident-11",
+            "kb-incident-01",
+            "kb-incident-16",
+            "kb-backup-07"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how many rounds of tool use are allowed",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-versioning-04",
             "kb-tool-calling",
-            "kb-billing",
-            "kb-streaming-protocol"
+            "kb-versioning-14",
+            "kb-versioning-19",
+            "kb-versioning-09"
           ],
           "rank": 2
+        },
+        {
+          "query": "what happens when a tool takes too long",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-webhook-18",
+            "kb-capacity-19",
+            "kb-tool-calling",
+            "kb-tenancy-00",
+            "kb-i18n-15"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "why expose search as a tool instead of doing it up front",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-streaming-protocol",
+            "kb-sdk-typescript",
+            "kb-neg-error-index-v0"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what does the desktop app read from the clipboard",
+          "family": "paraphrase",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-neg-mobile-reconnect",
+            "kb-electron-hotkeys",
+            "kb-email-14",
+            "kb-flags-03",
+            "kb-analytics-12"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how does the renderer avoid getting node access",
+          "family": "paraphrase",
+          "expected": [
+            "kb-electron-hotkeys",
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-frontend-performance",
+            "kb-mobile-15",
+            "kb-neg-prompt-guide",
+            "kb-attribution-20"
+          ],
+          "rank": 1
         },
         {
           "query": "how are microphone recordings turned into text",
@@ -743,73 +2435,117 @@
           ],
           "top_docs": [
             "kb-tool-calling",
+            "kb-capacity-09",
+            "kb-neg-transcription-vendor",
             "kb-security",
-            "kb-frontend-performance",
-            "kb-tool-calling",
-            "kb-distractor-tenancy-20"
+            "kb-frontend-performance"
           ],
           "rank": null
         },
         {
-          "query": "how do I cancel an answer that is already streaming",
+          "query": "what audio format is sent over the socket",
           "family": "paraphrase",
           "expected": [
-            "kb-cancellation"
+            "kb-audio-capture"
           ],
           "top_docs": [
-            "kb-frontend-performance",
-            "kb-cancellation",
-            "kb-pgvector-operations",
-            "kb-session-state",
-            "kb-pgvector-operations"
+            "kb-audio-capture",
+            "kb-audit-03",
+            "kb-attribution-11",
+            "kb-security",
+            "kb-audit-11"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how large is the rolling audio buffer",
+          "family": "paraphrase",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-transcription",
+            "kb-streaming-protocol",
+            "kb-neg-transcription-vendor",
+            "kb-audit-16"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how are partial captions produced",
+          "family": "paraphrase",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-neg-transcription-vendor",
+            "kb-neg-provider-outage",
+            "kb-billing",
+            "kb-billing-10"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how far behind speech do the captions lag",
+          "family": "paraphrase",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-versioning-12",
+            "kb-keys-11",
+            "kb-backup-10",
+            "kb-backup-15"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "where can I inspect the trace for a single turn",
+          "family": "paraphrase",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-telemetry",
+            "kb-backup-03",
+            "kb-onboarding-04",
+            "kb-backup-18",
+            "kb-cancellation"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "when does the first token timer start",
+          "family": "paraphrase",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-telemetry",
+            "kb-tool-calling",
+            "kb-neg-desktop-budget-legacy",
+            "kb-security"
           ],
           "rank": 2
         },
         {
-          "query": "why would semantic search return nothing at all",
+          "query": "which spans are recorded for a turn",
           "family": "paraphrase",
           "expected": [
-            "kb-error-codes",
-            "kb-hybrid-retrieval"
+            "kb-telemetry"
           ],
           "top_docs": [
-            "kb-distractor-semantic-33",
-            "kb-audio-capture",
-            "kb-pgvector-operations",
             "kb-session-state",
-            "kb-hybrid-retrieval"
-          ],
-          "rank": 5
-        },
-        {
-          "query": "how much memory should the desktop app use while sitting idle",
-          "family": "paraphrase",
-          "expected": [
-            "kb-frontend-performance"
-          ],
-          "top_docs": [
-            "kb-electron-hotkeys",
-            "kb-session-state",
-            "kb-deployment",
-            "kb-rate-limits",
-            "kb-pgvector-operations"
-          ],
-          "rank": null
-        },
-        {
-          "query": "how does the server avoid flooding a slow client with tokens",
-          "family": "paraphrase",
-          "expected": [
-            "kb-backpressure"
-          ],
-          "top_docs": [
-            "kb-streaming-protocol",
-            "kb-sdk-python",
             "kb-streaming-protocol",
             "kb-cancellation",
-            "kb-rate-limits"
+            "kb-telemetry",
+            "kb-billing"
           ],
-          "rank": null
+          "rank": 4
         },
         {
           "query": "how do I run the gateway across several servers",
@@ -818,13 +2554,43 @@
             "kb-deployment"
           ],
           "top_docs": [
-            "kb-cancellation",
-            "kb-audio-capture",
-            "kb-audio-capture",
-            "kb-streaming-protocol",
-            "kb-distractor-semantic-33"
+            "kb-versioning-01",
+            "kb-incident-08",
+            "kb-versioning-06",
+            "kb-audit-10",
+            "kb-incident-18"
           ],
           "rank": null
+        },
+        {
+          "query": "do I need sticky sessions",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-session-state",
+            "kb-analytics-07",
+            "kb-neg-mobile-reconnect",
+            "kb-analytics-03"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what does a replica do if redis disappears",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-session-state",
+            "kb-audio-capture",
+            "kb-keys-09",
+            "kb-keys-04"
+          ],
+          "rank": 1
         },
         {
           "query": "protecting the assistant from instructions hidden inside documents",
@@ -834,12 +2600,42 @@
           ],
           "top_docs": [
             "kb-sdk-python",
-            "kb-distractor-pricing-21",
-            "kb-distractor-ingestion-32",
-            "kb-distractor-caching-26",
-            "kb-distractor-migrations-29"
+            "kb-onboarding-01",
+            "kb-onboarding-13",
+            "kb-email-09",
+            "kb-neg-prompt-guide"
           ],
           "rank": null
+        },
+        {
+          "query": "how do clients authenticate to the socket",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-streaming-protocol",
+            "kb-security",
+            "kb-audio-capture",
+            "kb-sdk-typescript",
+            "kb-audit-03"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "can retrieved text trigger a tool call",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security",
+            "kb-telemetry",
+            "kb-streaming-protocol"
+          ],
+          "rank": 3
         },
         {
           "query": "what gets billed when a stream is cancelled halfway",
@@ -849,10 +2645,40 @@
           ],
           "top_docs": [
             "kb-billing",
+            "kb-attribution-03",
             "kb-error-codes",
+            "kb-attribution-18",
+            "kb-attribution-13"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what happens when a workspace runs out of budget",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-onboarding-19",
+            "kb-onboarding-09",
+            "kb-onboarding-04",
+            "kb-onboarding-14",
+            "kb-webhook-10"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what actually drives the cost of a turn",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-session-state",
             "kb-cancellation",
             "kb-streaming-protocol",
-            "kb-frontend-performance"
+            "kb-telemetry"
           ],
           "rank": 1
         },
@@ -864,10 +2690,25 @@
           ],
           "top_docs": [
             "kb-sdk-python",
-            "kb-distractor-pricing-21",
             "kb-billing",
-            "kb-distractor-health-31",
-            "kb-error-codes"
+            "kb-error-codes",
+            "kb-neg-prompt-guide",
+            "kb-backup-03"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how does the python sdk handle reconnects",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-python"
+          ],
+          "top_docs": [
+            "kb-sdk-python",
+            "kb-neg-mobile-reconnect",
+            "kb-websocket-reconnect",
+            "kb-email-14",
+            "kb-attribution-06"
           ],
           "rank": 1
         },
@@ -881,87 +2722,362 @@
             "kb-sdk-typescript",
             "kb-billing",
             "kb-streaming-protocol",
-            "kb-sdk-python",
+            "kb-audit-06",
+            "kb-neg-relevance-experiments"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "can the typescript client run outside electron",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-typescript"
+          ],
+          "top_docs": [
+            "kb-neg-desktop-budget-legacy",
+            "kb-audio-capture",
+            "kb-versioning-11",
+            "kb-sdk-typescript",
+            "kb-transcription"
+          ],
+          "rank": 4
+        },
+        {
+          "query": "how much memory should the desktop app use while sitting idle",
+          "family": "paraphrase",
+          "expected": [
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-storage-01",
+            "kb-neg-mobile-reconnect",
+            "kb-storage-06",
+            "kb-storage-11"
+          ],
+          "rank": null
+        },
+        {
+          "query": "why is markdown parsing expensive while streaming",
+          "family": "paraphrase",
+          "expected": [
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-export-17",
+            "kb-export-01",
+            "kb-export-13",
+            "kb-export-08"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how does the server avoid flooding a slow client with tokens",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-versioning-07",
+            "kb-versioning-02",
+            "kb-streaming-protocol",
+            "kb-billing-12",
+            "kb-billing-07"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what happens to tokens when the send queue is full",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-webhook-18",
+            "kb-backpressure",
+            "kb-mobile-10",
+            "kb-webhook-10",
+            "kb-webhook-02"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how many frames per second does the server emit",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-sdk-typescript",
+            "kb-audio-capture",
+            "kb-tool-calling",
             "kb-streaming-protocol"
           ],
           "rank": 1
         },
         {
-          "query": "where can I inspect the trace for a single turn",
-          "family": "paraphrase",
+          "query": "CUE-E1042 context window exceeded",
+          "family": "near_miss",
           "expected": [
-            "kb-telemetry"
+            "kb-error-codes"
           ],
           "top_docs": [
-            "kb-telemetry",
-            "kb-cancellation",
-            "kb-distractor-caching-26",
-            "kb-distractor-onboarding-01",
-            "kb-distractor-tuning-27"
+            "kb-error-codes",
+            "kb-attribution-17",
+            "kb-i18n-06",
+            "kb-webhook-14",
+            "kb-export-15"
           ],
           "rank": 1
         },
         {
-          "query": "what does the desktop app read from the clipboard",
-          "family": "paraphrase",
+          "query": "CUE-E2041 provider rate limit",
+          "family": "near_miss",
           "expected": [
-            "kb-electron-hotkeys"
+            "kb-error-codes",
+            "kb-rate-limits"
           ],
           "top_docs": [
-            "kb-electron-hotkeys",
-            "kb-sdk-python",
-            "kb-security",
-            "kb-distractor-release-23",
+            "kb-error-codes",
+            "kb-neg-provider-outage",
+            "kb-rate-limits",
+            "kb-neg-error-index-v0",
+            "kb-analytics-13"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E5032 tool timeout",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes",
             "kb-tool-calling"
           ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-tool-calling",
+            "kb-neg-error-index-v0",
+            "kb-flags-09",
+            "kb-billing-09"
+          ],
           "rank": 1
         },
         {
-          "query": "splitting camelCase and snake_case identifiers for search",
-          "family": "paraphrase",
+          "query": "CUE-E6020 workspace budget",
+          "family": "near_miss",
           "expected": [
-            "kb-hybrid-retrieval"
+            "kb-billing"
           ],
           "top_docs": [
-            "kb-hybrid-retrieval",
-            "kb-distractor-tuning-27",
-            "kb-distractor-ranking-17",
-            "kb-error-codes",
-            "kb-pgvector-operations"
+            "kb-billing-00",
+            "kb-storage-08",
+            "kb-i18n-07",
+            "kb-billing-05",
+            "kb-i18n-17"
           ],
-          "rank": 1
+          "rank": null
         },
         {
-          "query": "exponential backoff with jitter on reconnect",
-          "family": "paraphrase",
+          "query": "retry_backoff_cap_ms reconnect delay",
+          "family": "near_miss",
           "expected": [
             "kb-websocket-reconnect"
           ],
           "top_docs": [
             "kb-websocket-reconnect",
             "kb-rate-limits",
+            "kb-audit-03",
+            "kb-audit-05",
+            "kb-neg-mobile-reconnect"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "tool_timeout_s tool dispatch",
+          "family": "near_miss",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
             "kb-error-codes",
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "delta_flush_ms coalescing window",
+          "family": "near_miss",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-attribution-17",
+            "kb-versioning-04",
+            "kb-flags-09",
+            "kb-incident-11"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "ws_send_queue_size send queue",
+          "family": "near_miss",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-deployment",
+            "kb-mobile-06",
+            "kb-webhook-14",
+            "kb-mobile-10"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "hnsw.ef_search recall tradeoff",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-analytics-14",
+            "kb-analytics-04",
+            "kb-analytics-09"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "vector_cosine_ops index operator class",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-neg-error-index-v0",
+            "kb-attribution-15",
+            "kb-onboarding-01"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "turn_history_limit prompt messages",
+          "family": "near_miss",
+          "expected": [
             "kb-session-state",
-            "kb-sdk-python"
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "whisper-1 transcription model",
+          "family": "near_miss",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-neg-provider-outage",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CmdOrCtrl+Shift+Space global shortcut",
+          "family": "near_miss",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-neg-desktop-budget-legacy",
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "max_tool_iterations tool rounds",
+          "family": "near_miss",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-security",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-keys-14"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "requestAnimationFrame delta batching",
+          "family": "near_miss",
+          "expected": [
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-streaming-protocol",
+            "kb-audit-16"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "kb_meta.version cache invalidation",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-hybrid-retrieval",
+            "kb-mobile-11",
+            "kb-session-state",
+            "kb-mobile-19"
           ],
           "rank": 1
         }
       ]
     },
     "hybrid": {
-      "recall_at_5": 0.9,
-      "mrr": 0.7639,
-      "hits": 27,
-      "n": 30,
+      "recall_at_5": 0.87,
+      "mrr": 0.7715,
+      "hits": 87,
+      "n": 100,
       "latency_ms": {
-        "count": 30,
-        "p50": 1.38,
-        "p95": 1.69,
-        "mean": 1.42
+        "count": 100,
+        "p50": 1.91,
+        "p95": 2.46,
+        "mean": 1.93
       },
       "by_family": {
         "identifier": 1.0,
-        "paraphrase": 0.8125
+        "paraphrase": 0.7778,
+        "near_miss": 0.9375
       },
       "per_query": [
         {
@@ -972,10 +3088,10 @@
           ],
           "top_docs": [
             "kb-error-codes",
-            "kb-error-codes",
-            "kb-billing",
-            "kb-sdk-typescript",
-            "kb-audio-capture"
+            "kb-neg-error-index-v0",
+            "kb-a11y-16",
+            "kb-capacity-04",
+            "kb-electron-hotkeys"
           ],
           "rank": 1
         },
@@ -987,11 +3103,11 @@
             "kb-rate-limits"
           ],
           "top_docs": [
+            "kb-error-codes",
             "kb-rate-limits",
-            "kb-error-codes",
-            "kb-error-codes",
-            "kb-websocket-reconnect",
-            "kb-audio-capture"
+            "kb-a11y-17",
+            "kb-onboarding-03",
+            "kb-i18n-11"
           ],
           "rank": 1
         },
@@ -1004,9 +3120,55 @@
           "top_docs": [
             "kb-error-codes",
             "kb-audio-capture",
+            "kb-neg-error-index-v0",
+            "kb-billing",
+            "kb-versioning-10"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E5032",
+          "family": "identifier",
+          "expected": [
             "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
+            "kb-audio-capture",
             "kb-billing",
             "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E6020",
+          "family": "identifier",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-neg-error-index-v0",
+            "kb-error-codes",
+            "kb-audio-capture",
+            "kb-rate-limits"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E3010",
+          "family": "identifier",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-audio-capture",
+            "kb-sdk-typescript",
+            "kb-neg-error-index-v0",
+            "kb-flags-19"
           ],
           "rank": 1
         },
@@ -1020,8 +3182,8 @@
             "kb-websocket-reconnect",
             "kb-rate-limits",
             "kb-error-codes",
-            "kb-session-state",
-            "kb-error-codes"
+            "kb-webhook-01",
+            "kb-webhook-13"
           ],
           "rank": 1
         },
@@ -1034,9 +3196,24 @@
           "top_docs": [
             "kb-backpressure",
             "kb-deployment",
-            "kb-telemetry",
-            "kb-distractor-workers-28",
-            "kb-audio-capture"
+            "kb-mobile-06",
+            "kb-webhook-14",
+            "kb-billing-03"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "delta_flush_ms",
+          "family": "identifier",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-streaming-protocol",
+            "kb-websocket-reconnect",
+            "kb-tool-calling",
+            "kb-i18n-01"
           ],
           "rank": 1
         },
@@ -1049,11 +3226,26 @@
           "top_docs": [
             "kb-error-codes",
             "kb-tool-calling",
-            "kb-tool-calling",
-            "kb-security",
-            "kb-sdk-python"
+            "kb-i18n-16",
+            "kb-i18n-11",
+            "kb-i18n-06"
           ],
           "rank": 2
+        },
+        {
+          "query": "max_tool_iterations",
+          "family": "identifier",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-security",
+            "kb-neg-vector-bakeoff",
+            "kb-cancellation",
+            "kb-error-codes"
+          ],
+          "rank": 1
         },
         {
           "query": "hnsw.ef_search",
@@ -1063,10 +3255,10 @@
           ],
           "top_docs": [
             "kb-pgvector-operations",
-            "kb-distractor-tuning-27",
-            "kb-tool-calling",
-            "kb-distractor-analytics-06",
-            "kb-distractor-ranking-17"
+            "kb-neg-vector-bakeoff",
+            "kb-analytics-03",
+            "kb-analytics-08",
+            "kb-analytics-04"
           ],
           "rank": 1
         },
@@ -1079,86 +3271,9 @@
           "top_docs": [
             "kb-pgvector-operations",
             "kb-hybrid-retrieval",
-            "kb-pgvector-operations",
-            "kb-distractor-tuning-27",
-            "kb-error-codes"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "transcription_model whisper-1",
-          "family": "identifier",
-          "expected": [
-            "kb-transcription"
-          ],
-          "top_docs": [
-            "kb-transcription",
-            "kb-audio-capture",
-            "kb-hybrid-retrieval",
-            "kb-audio-capture",
-            "kb-error-codes"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "CmdOrCtrl+Shift+Space",
-          "family": "identifier",
-          "expected": [
-            "kb-electron-hotkeys"
-          ],
-          "top_docs": [
-            "kb-electron-hotkeys",
-            "kb-streaming-protocol",
-            "kb-audio-capture",
-            "kb-websocket-reconnect",
-            "kb-audio-capture"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "requestAnimationFrame batching",
-          "family": "identifier",
-          "expected": [
-            "kb-sdk-typescript",
-            "kb-frontend-performance"
-          ],
-          "top_docs": [
-            "kb-frontend-performance",
-            "kb-sdk-typescript",
-            "kb-audio-capture",
-            "kb-sdk-python",
-            "kb-error-codes"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "turn_history_limit",
-          "family": "identifier",
-          "expected": [
-            "kb-session-state",
-            "kb-billing"
-          ],
-          "top_docs": [
-            "kb-session-state",
+            "kb-neg-vector-bakeoff",
             "kb-error-codes",
-            "kb-billing",
-            "kb-cancellation",
-            "kb-streaming-protocol"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "llm_fallback_models",
-          "family": "identifier",
-          "expected": [
-            "kb-rate-limits"
-          ],
-          "top_docs": [
-            "kb-rate-limits",
-            "kb-error-codes",
-            "kb-telemetry",
-            "kb-websocket-reconnect",
-            "kb-electron-hotkeys"
+            "kb-onboarding-13"
           ],
           "rank": 1
         },
@@ -1173,9 +3288,299 @@
             "kb-hybrid-retrieval",
             "kb-session-state",
             "kb-telemetry",
+            "kb-versioning-04"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "retrieval_candidate_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-telemetry",
+            "kb-tool-calling",
+            "kb-billing",
+            "kb-neg-relevance-experiments"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "rrf_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-analytics-03",
+            "kb-export-10",
+            "kb-flags-04",
+            "kb-onboarding-18"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "turn_history_limit",
+          "family": "identifier",
+          "expected": [
+            "kb-session-state",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "session_ttl_s",
+          "family": "identifier",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-deployment",
+            "kb-analytics-03",
+            "kb-telemetry",
             "kb-websocket-reconnect"
           ],
           "rank": 1
+        },
+        {
+          "query": "transcription_model whisper-1",
+          "family": "identifier",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-error-codes",
+            "kb-neg-transcription-vendor"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "audio_window_ms",
+          "family": "identifier",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-neg-transcription-vendor",
+            "kb-transcription",
+            "kb-electron-hotkeys",
+            "kb-a11y-07"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CmdOrCtrl+Shift+Space",
+          "family": "identifier",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-neg-desktop-budget-legacy",
+            "kb-neg-legacy-protocol",
+            "kb-streaming-protocol",
+            "kb-audio-capture"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "requestAnimationFrame batching",
+          "family": "identifier",
+          "expected": [
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-sdk-typescript",
+            "kb-neg-desktop-budget-legacy",
+            "kb-audio-capture",
+            "kb-error-codes"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "llm_fallback_models",
+          "family": "identifier",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-neg-desktop-budget-legacy",
+            "kb-error-codes",
+            "kb-telemetry",
+            "kb-neg-relevance-experiments"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "provider_fallbacks",
+          "family": "identifier",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-rate-limits",
+            "kb-neg-provider-outage",
+            "kb-error-codes",
+            "kb-billing",
+            "kb-deployment"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "ws_max_message_bytes",
+          "family": "identifier",
+          "expected": [
+            "kb-audio-capture"
+          ],
+          "top_docs": [
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-deployment",
+            "kb-streaming-protocol",
+            "kb-backpressure"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "retrieval_top_k",
+          "family": "identifier",
+          "expected": [
+            "kb-hybrid-retrieval",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-telemetry",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "cue:context IPC",
+          "family": "identifier",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-error-codes",
+            "kb-sdk-python",
+            "kb-security",
+            "kb-neg-error-index-v0"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "/api/traces/{trace_id}",
+          "family": "identifier",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-telemetry",
+            "kb-versioning-17",
+            "kb-versioning-00",
+            "kb-versioning-07",
+            "kb-versioning-20"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "allow_degraded_infra",
+          "family": "identifier",
+          "expected": [
+            "kb-pgvector-operations",
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-a11y-01",
+            "kb-deployment",
+            "kb-billing",
+            "kb-mobile-10"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "kb_search tool",
+          "family": "identifier",
+          "expected": [
+            "kb-tool-calling",
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-pgvector-operations",
+            "kb-error-codes",
+            "kb-neg-vector-bakeoff",
+            "kb-security"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what order do messages arrive in during one answer",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-a11y-12",
+            "kb-i18n-11",
+            "kb-a11y-07",
+            "kb-i18n-01",
+            "kb-i18n-16"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how does the client know an answer is finished",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-versioning-19",
+            "kb-neg-legacy-protocol",
+            "kb-versioning-14",
+            "kb-a11y-12"
+          ],
+          "rank": null
+        },
+        {
+          "query": "which message types can the browser send to the server",
+          "family": "paraphrase",
+          "expected": [
+            "kb-streaming-protocol"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-streaming-protocol",
+            "kb-audio-capture",
+            "kb-telemetry",
+            "kb-backpressure"
+          ],
+          "rank": 2
         },
         {
           "query": "how do I stop every desktop client reconnecting at the same time",
@@ -1184,11 +3589,254 @@
             "kb-websocket-reconnect"
           ],
           "top_docs": [
+            "kb-neg-desktop-budget-legacy",
             "kb-rate-limits",
             "kb-websocket-reconnect",
             "kb-sdk-python",
+            "kb-neg-mobile-reconnect"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "what happens when the connection silently dies",
+          "family": "paraphrase",
+          "expected": [
+            "kb-websocket-reconnect"
+          ],
+          "top_docs": [
+            "kb-keys-10",
+            "kb-billing-01",
+            "kb-billing-11",
+            "kb-billing-16",
+            "kb-billing-06"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how long does the client wait between reconnection attempts",
+          "family": "paraphrase",
+          "expected": [
+            "kb-websocket-reconnect"
+          ],
+          "top_docs": [
+            "kb-cancellation",
+            "kb-streaming-protocol",
+            "kb-error-codes",
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "rank": null
+        },
+        {
+          "query": "why would semantic search return nothing at all",
+          "family": "paraphrase",
+          "expected": [
+            "kb-error-codes",
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-analytics-16",
+            "kb-hybrid-retrieval",
             "kb-electron-hotkeys",
+            "kb-analytics-11",
+            "kb-analytics-06"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "what does it mean when the model input is too long",
+          "family": "paraphrase",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-tool-calling",
+            "kb-neg-provider-outage",
+            "kb-hybrid-retrieval",
+            "kb-cancellation"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how are keyword and vector results combined",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-error-codes",
+            "kb-pgvector-operations",
+            "kb-tool-calling",
+            "kb-neg-vector-bakeoff"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "why not use a cross encoder to rerank the candidates",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-electron-hotkeys",
+            "kb-pgvector-operations",
+            "kb-rate-limits",
+            "kb-versioning-19"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how long are search results cached for",
+          "family": "paraphrase",
+          "expected": [
+            "kb-hybrid-retrieval"
+          ],
+          "top_docs": [
+            "kb-hybrid-retrieval",
+            "kb-tool-calling",
+            "kb-analytics-08",
+            "kb-analytics-03",
+            "kb-analytics-18"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how do I make the vector index work harder for better recall",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
+            "kb-billing-16"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what should I run after a large re-ingest",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-a11y-01",
+            "kb-audio-capture",
+            "kb-analytics-12",
             "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what happens to search if postgres is down",
+          "family": "paraphrase",
+          "expected": [
+            "kb-pgvector-operations",
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-analytics-03",
+            "kb-analytics-08",
+            "kb-analytics-18",
+            "kb-analytics-13",
+            "kb-analytics-16"
+          ],
+          "rank": null
+        },
+        {
+          "query": "how much conversation history goes into the prompt",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-error-codes",
+            "kb-neg-mobile-reconnect"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "where is conversation state kept so a reconnect works",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-websocket-reconnect",
+            "kb-neg-mobile-reconnect",
+            "kb-session-state",
+            "kb-streaming-protocol",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 3
+        },
+        {
+          "query": "how often is session state written to redis",
+          "family": "paraphrase",
+          "expected": [
+            "kb-session-state"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-session-state",
+            "kb-analytics-03",
+            "kb-websocket-reconnect",
+            "kb-analytics-11"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how do I cancel an answer that is already streaming",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation"
+          ],
+          "top_docs": [
+            "kb-export-01",
+            "kb-frontend-performance",
+            "kb-export-09",
+            "kb-export-05",
+            "kb-cancellation"
+          ],
+          "rank": 5
+        },
+        {
+          "query": "what happens if I send a new question while one is running",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-i18n-01",
+            "kb-i18n-11",
+            "kb-onboarding-03",
+            "kb-sdk-typescript"
+          ],
+          "rank": null
+        },
+        {
+          "query": "does cancelling stop the provider charging me",
+          "family": "paraphrase",
+          "expected": [
+            "kb-cancellation",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-neg-provider-outage",
+            "kb-cancellation",
+            "kb-streaming-protocol",
+            "kb-rate-limits",
+            "kb-error-codes"
           ],
           "rank": 2
         },
@@ -1199,13 +3847,119 @@
             "kb-rate-limits"
           ],
           "top_docs": [
+            "kb-neg-provider-outage",
             "kb-error-codes",
             "kb-rate-limits",
-            "kb-billing",
-            "kb-tool-calling",
+            "kb-webhook-18",
             "kb-telemetry"
           ],
+          "rank": 3
+        },
+        {
+          "query": "when does the gateway switch to a different model",
+          "family": "paraphrase",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-provider-outage",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-cancellation"
+          ],
+          "rank": null
+        },
+        {
+          "query": "why won't it retry in the middle of a response",
+          "family": "paraphrase",
+          "expected": [
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-incident-11",
+            "kb-incident-06",
+            "kb-incident-16",
+            "kb-incident-01",
+            "kb-rate-limits"
+          ],
+          "rank": 5
+        },
+        {
+          "query": "how many rounds of tool use are allowed",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-pgvector-operations",
+            "kb-rate-limits",
+            "kb-electron-hotkeys",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what happens when a tool takes too long",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-keys-02",
+            "kb-a11y-16",
+            "kb-i18n-15",
+            "kb-i18n-00"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "why expose search as a tool instead of doing it up front",
+          "family": "paraphrase",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-neg-error-index-v0",
+            "kb-sdk-typescript",
+            "kb-error-codes",
+            "kb-analytics-15"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what does the desktop app read from the clipboard",
+          "family": "paraphrase",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-neg-mobile-reconnect",
+            "kb-electron-hotkeys",
+            "kb-keys-02",
+            "kb-a11y-06",
+            "kb-onboarding-02"
+          ],
           "rank": 2
+        },
+        {
+          "query": "how does the renderer avoid getting node access",
+          "family": "paraphrase",
+          "expected": [
+            "kb-electron-hotkeys",
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-frontend-performance",
+            "kb-neg-prompt-guide",
+            "kb-security",
+            "kb-mobile-15"
+          ],
+          "rank": 1
         },
         {
           "query": "how are microphone recordings turned into text",
@@ -1216,146 +3970,70 @@
           ],
           "top_docs": [
             "kb-tool-calling",
-            "kb-security",
-            "kb-tool-calling",
             "kb-frontend-performance",
-            "kb-backpressure"
+            "kb-security",
+            "kb-capacity-09",
+            "kb-neg-audio-codec"
           ],
           "rank": null
         },
         {
-          "query": "how do I cancel an answer that is already streaming",
+          "query": "what audio format is sent over the socket",
           "family": "paraphrase",
           "expected": [
-            "kb-cancellation"
+            "kb-audio-capture"
           ],
           "top_docs": [
-            "kb-frontend-performance",
-            "kb-cancellation",
-            "kb-transcription",
-            "kb-electron-hotkeys",
-            "kb-streaming-protocol"
-          ],
-          "rank": 2
-        },
-        {
-          "query": "why would semantic search return nothing at all",
-          "family": "paraphrase",
-          "expected": [
-            "kb-error-codes",
-            "kb-hybrid-retrieval"
-          ],
-          "top_docs": [
-            "kb-distractor-semantic-33",
-            "kb-electron-hotkeys",
-            "kb-hybrid-retrieval",
-            "kb-pgvector-operations",
-            "kb-distractor-ranking-17"
-          ],
-          "rank": 3
-        },
-        {
-          "query": "how much memory should the desktop app use while sitting idle",
-          "family": "paraphrase",
-          "expected": [
-            "kb-frontend-performance"
-          ],
-          "top_docs": [
+            "kb-audio-capture",
+            "kb-security",
             "kb-session-state",
-            "kb-electron-hotkeys",
-            "kb-deployment",
-            "kb-frontend-performance",
-            "kb-pgvector-operations"
+            "kb-streaming-protocol",
+            "kb-audit-03"
           ],
-          "rank": 4
+          "rank": 1
         },
         {
-          "query": "how does the server avoid flooding a slow client with tokens",
+          "query": "how large is the rolling audio buffer",
           "family": "paraphrase",
           "expected": [
-            "kb-backpressure"
-          ],
-          "top_docs": [
-            "kb-streaming-protocol",
-            "kb-streaming-protocol",
-            "kb-frontend-performance",
-            "kb-sdk-python",
-            "kb-cancellation"
-          ],
-          "rank": null
-        },
-        {
-          "query": "how do I run the gateway across several servers",
-          "family": "paraphrase",
-          "expected": [
-            "kb-deployment"
+            "kb-audio-capture"
           ],
           "top_docs": [
             "kb-audio-capture",
-            "kb-websocket-reconnect",
-            "kb-audio-capture",
-            "kb-cancellation",
-            "kb-streaming-protocol"
+            "kb-streaming-protocol",
+            "kb-transcription",
+            "kb-neg-transcription-vendor",
+            "kb-electron-hotkeys"
           ],
-          "rank": null
+          "rank": 1
         },
         {
-          "query": "protecting the assistant from instructions hidden inside documents",
+          "query": "how are partial captions produced",
           "family": "paraphrase",
           "expected": [
-            "kb-security"
+            "kb-transcription"
           ],
           "top_docs": [
-            "kb-distractor-ingestion-32",
-            "kb-distractor-cost-30",
-            "kb-security",
-            "kb-distractor-incident-13",
-            "kb-distractor-migrations-29"
-          ],
-          "rank": 3
-        },
-        {
-          "query": "what gets billed when a stream is cancelled halfway",
-          "family": "paraphrase",
-          "expected": [
+            "kb-transcription",
+            "kb-neg-transcription-vendor",
+            "kb-neg-provider-outage",
+            "kb-neg-relevance-experiments",
             "kb-billing"
           ],
-          "top_docs": [
-            "kb-billing",
-            "kb-error-codes",
-            "kb-cancellation",
-            "kb-electron-hotkeys",
-            "kb-streaming-protocol"
-          ],
           "rank": 1
         },
         {
-          "query": "python library usage example",
+          "query": "how far behind speech do the captions lag",
           "family": "paraphrase",
           "expected": [
-            "kb-sdk-python"
+            "kb-transcription"
           ],
           "top_docs": [
-            "kb-sdk-python",
-            "kb-billing",
-            "kb-distractor-pricing-21",
-            "kb-error-codes",
-            "kb-error-codes"
-          ],
-          "rank": 1
-        },
-        {
-          "query": "react hook that batches incoming tokens",
-          "family": "paraphrase",
-          "expected": [
-            "kb-sdk-typescript"
-          ],
-          "top_docs": [
-            "kb-sdk-typescript",
-            "kb-billing",
-            "kb-sdk-python",
-            "kb-cancellation",
-            "kb-rate-limits"
+            "kb-transcription",
+            "kb-neg-cost-governance",
+            "kb-versioning-12",
+            "kb-keys-11",
+            "kb-neg-desktop-budget-legacy"
           ],
           "rank": 1
         },
@@ -1369,67 +4047,577 @@
             "kb-telemetry",
             "kb-cancellation",
             "kb-session-state",
-            "kb-tool-calling",
-            "kb-distractor-ingestion-32"
+            "kb-backup-03",
+            "kb-onboarding-04"
           ],
           "rank": 1
         },
         {
-          "query": "what does the desktop app read from the clipboard",
+          "query": "when does the first token timer start",
           "family": "paraphrase",
           "expected": [
-            "kb-electron-hotkeys"
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-neg-desktop-budget-legacy",
+            "kb-rate-limits",
+            "kb-backpressure",
+            "kb-telemetry",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 4
+        },
+        {
+          "query": "which spans are recorded for a turn",
+          "family": "paraphrase",
+          "expected": [
+            "kb-telemetry"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-telemetry",
+            "kb-cancellation",
+            "kb-streaming-protocol",
+            "kb-billing"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how do I run the gateway across several servers",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-i18n-13",
+            "kb-a11y-04",
+            "kb-a11y-09",
+            "kb-a11y-19",
+            "kb-attribution-19"
+          ],
+          "rank": null
+        },
+        {
+          "query": "do I need sticky sessions",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-session-state",
+            "kb-neg-mobile-reconnect",
+            "kb-analytics-07",
+            "kb-analytics-03"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what does a replica do if redis disappears",
+          "family": "paraphrase",
+          "expected": [
+            "kb-deployment"
+          ],
+          "top_docs": [
+            "kb-deployment",
+            "kb-session-state",
+            "kb-audio-capture",
+            "kb-cancellation",
+            "kb-hybrid-retrieval"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "protecting the assistant from instructions hidden inside documents",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-neg-transcription-vendor",
+            "kb-security",
+            "kb-sdk-python",
+            "kb-tool-calling",
+            "kb-onboarding-01"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how do clients authenticate to the socket",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-security",
+            "kb-streaming-protocol",
+            "kb-session-state",
+            "kb-sdk-typescript",
+            "kb-sdk-python"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "can retrieved text trigger a tool call",
+          "family": "paraphrase",
+          "expected": [
+            "kb-security"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-security",
+            "kb-error-codes",
+            "kb-telemetry",
+            "kb-streaming-protocol"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "what gets billed when a stream is cancelled halfway",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-streaming-protocol",
+            "kb-rate-limits"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "what happens when a workspace runs out of budget",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-onboarding-09",
+            "kb-onboarding-19",
+            "kb-onboarding-04",
+            "kb-billing-05",
+            "kb-onboarding-14"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what actually drives the cost of a turn",
+          "family": "paraphrase",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-session-state",
+            "kb-cancellation",
+            "kb-telemetry",
+            "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "python library usage example",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-python"
+          ],
+          "top_docs": [
+            "kb-billing",
+            "kb-sdk-python",
+            "kb-error-codes",
+            "kb-deployment",
+            "kb-neg-prompt-guide"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how does the python sdk handle reconnects",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-python"
+          ],
+          "top_docs": [
+            "kb-sdk-python",
+            "kb-neg-mobile-reconnect",
+            "kb-websocket-reconnect",
+            "kb-neg-legacy-protocol",
+            "kb-sdk-typescript"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "react hook that batches incoming tokens",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-typescript"
+          ],
+          "top_docs": [
+            "kb-sdk-typescript",
+            "kb-billing",
+            "kb-sdk-python",
+            "kb-neg-relevance-experiments",
+            "kb-cancellation"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "can the typescript client run outside electron",
+          "family": "paraphrase",
+          "expected": [
+            "kb-sdk-typescript"
+          ],
+          "top_docs": [
+            "kb-neg-desktop-budget-legacy",
+            "kb-sdk-typescript",
+            "kb-versioning-11",
+            "kb-audio-capture",
+            "kb-versioning-06"
+          ],
+          "rank": 2
+        },
+        {
+          "query": "how much memory should the desktop app use while sitting idle",
+          "family": "paraphrase",
+          "expected": [
+            "kb-frontend-performance"
           ],
           "top_docs": [
             "kb-electron-hotkeys",
-            "kb-sdk-python",
-            "kb-security",
+            "kb-neg-mobile-reconnect",
             "kb-session-state",
-            "kb-websocket-reconnect"
+            "kb-deployment",
+            "kb-i18n-15"
           ],
-          "rank": 1
+          "rank": null
         },
         {
-          "query": "splitting camelCase and snake_case identifiers for search",
+          "query": "why is markdown parsing expensive while streaming",
           "family": "paraphrase",
           "expected": [
-            "kb-hybrid-retrieval"
+            "kb-frontend-performance"
           ],
           "top_docs": [
-            "kb-hybrid-retrieval",
-            "kb-distractor-ranking-17",
-            "kb-distractor-tuning-27",
-            "kb-pgvector-operations",
-            "kb-distractor-analytics-06"
+            "kb-frontend-performance",
+            "kb-export-01",
+            "kb-export-17",
+            "kb-export-13",
+            "kb-export-09"
           ],
           "rank": 1
         },
         {
-          "query": "exponential backoff with jitter on reconnect",
+          "query": "how does the server avoid flooding a slow client with tokens",
           "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-streaming-protocol",
+            "kb-versioning-07",
+            "kb-sdk-python",
+            "kb-versioning-02",
+            "kb-cancellation"
+          ],
+          "rank": null
+        },
+        {
+          "query": "what happens to tokens when the send queue is full",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-webhook-18",
+            "kb-mobile-10",
+            "kb-webhook-10",
+            "kb-webhook-02"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "how many frames per second does the server emit",
+          "family": "paraphrase",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-sdk-typescript",
+            "kb-streaming-protocol",
+            "kb-tool-calling",
+            "kb-audio-capture"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E1042 context window exceeded",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-attribution-17",
+            "kb-keys-18",
+            "kb-a11y-07",
+            "kb-electron-hotkeys"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E2041 provider rate limit",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes",
+            "kb-rate-limits"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-rate-limits",
+            "kb-neg-provider-outage",
+            "kb-neg-error-index-v0",
+            "kb-analytics-13"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E5032 tool timeout",
+          "family": "near_miss",
+          "expected": [
+            "kb-error-codes",
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-error-codes",
+            "kb-neg-error-index-v0",
+            "kb-tool-calling",
+            "kb-security",
+            "kb-a11y-02"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CUE-E6020 workspace budget",
+          "family": "near_miss",
+          "expected": [
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-billing-00",
+            "kb-billing-05",
+            "kb-i18n-07",
+            "kb-onboarding-04",
+            "kb-i18n-17"
+          ],
+          "rank": null
+        },
+        {
+          "query": "retry_backoff_cap_ms reconnect delay",
+          "family": "near_miss",
           "expected": [
             "kb-websocket-reconnect"
           ],
           "top_docs": [
             "kb-websocket-reconnect",
-            "kb-error-codes",
             "kb-rate-limits",
+            "kb-neg-mobile-reconnect",
+            "kb-webhook-13",
+            "kb-audit-03"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "tool_timeout_s tool dispatch",
+          "family": "near_miss",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security",
+            "kb-neg-error-index-v0",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "delta_flush_ms coalescing window",
+          "family": "near_miss",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-attribution-17",
+            "kb-i18n-16",
+            "kb-i18n-01",
+            "kb-export-15"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "ws_send_queue_size send queue",
+          "family": "near_miss",
+          "expected": [
+            "kb-backpressure"
+          ],
+          "top_docs": [
+            "kb-backpressure",
+            "kb-deployment",
+            "kb-mobile-06",
+            "kb-webhook-14",
+            "kb-mobile-10"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "hnsw.ef_search recall tradeoff",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-neg-relevance-experiments",
+            "kb-analytics-04",
+            "kb-analytics-14"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "vector_cosine_ops index operator class",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-neg-vector-bakeoff",
+            "kb-neg-error-index-v0",
+            "kb-hybrid-retrieval",
+            "kb-neg-autoscaling"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "turn_history_limit prompt messages",
+          "family": "near_miss",
+          "expected": [
             "kb-session-state",
+            "kb-billing"
+          ],
+          "top_docs": [
+            "kb-session-state",
+            "kb-billing",
+            "kb-error-codes",
+            "kb-cancellation",
+            "kb-telemetry"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "whisper-1 transcription model",
+          "family": "near_miss",
+          "expected": [
+            "kb-transcription"
+          ],
+          "top_docs": [
+            "kb-transcription",
+            "kb-audio-capture",
+            "kb-hybrid-retrieval",
+            "kb-error-codes",
+            "kb-neg-transcription-vendor"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "CmdOrCtrl+Shift+Space global shortcut",
+          "family": "near_miss",
+          "expected": [
+            "kb-electron-hotkeys"
+          ],
+          "top_docs": [
+            "kb-electron-hotkeys",
+            "kb-neg-desktop-budget-legacy",
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-neg-legacy-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "max_tool_iterations tool rounds",
+          "family": "near_miss",
+          "expected": [
+            "kb-tool-calling"
+          ],
+          "top_docs": [
+            "kb-tool-calling",
+            "kb-error-codes",
+            "kb-security",
+            "kb-cancellation",
+            "kb-neg-error-index-v0"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "requestAnimationFrame delta batching",
+          "family": "near_miss",
+          "expected": [
+            "kb-sdk-typescript",
+            "kb-frontend-performance"
+          ],
+          "top_docs": [
+            "kb-frontend-performance",
+            "kb-sdk-typescript",
+            "kb-backpressure",
+            "kb-neg-desktop-budget-legacy",
             "kb-streaming-protocol"
+          ],
+          "rank": 1
+        },
+        {
+          "query": "kb_meta.version cache invalidation",
+          "family": "near_miss",
+          "expected": [
+            "kb-pgvector-operations"
+          ],
+          "top_docs": [
+            "kb-pgvector-operations",
+            "kb-hybrid-retrieval",
+            "kb-session-state",
+            "kb-telemetry",
+            "kb-versioning-04"
           ],
           "rank": 1
         }
       ]
     },
     "summary": {
-      "corpus_documents": 56,
-      "corpus_chunks": 62,
-      "ingest_ms": 136.17,
+      "corpus_documents": 412,
+      "corpus_chunks": 796,
+      "ingest_ms": 1432.51,
       "embedder": "hash-feature-v1",
-      "hybrid_vs_best_single_pp": 3.33,
-      "hybrid_vs_dense_pp": 6.67,
-      "queries_dense_missed_hybrid_found": 2,
-      "queries_bm25_missed_hybrid_found": 1
+      "queries": 100,
+      "queries_by_family": {
+        "identifier": 30,
+        "paraphrase": 54,
+        "near_miss": 16
+      },
+      "hybrid_vs_best_single_pp": 0.0,
+      "hybrid_vs_dense_pp": 4.0,
+      "queries_dense_missed_hybrid_found": 5,
+      "queries_bm25_missed_hybrid_found": 3,
+      "queries_any_single_found": 89,
+      "queries_hybrid_found_neither": 2,
+      "queries_hybrid_lost_from_singles": 4,
+      "union_recall_at_5": 0.89,
+      "fusion_gap": 4
     }
   },
   "ttft": {
@@ -1437,21 +4625,21 @@
     "turns": 8,
     "client_ttft_ms": {
       "count": 8,
-      "p50": 124.63,
-      "p95": 130.35,
-      "mean": 125.39
+      "p50": 124.18,
+      "p95": 129.9,
+      "mean": 125.24
     },
     "server_ttft_ms": {
       "count": 8,
-      "p50": 123.42,
-      "p95": 129.29,
-      "mean": 124.27
+      "p50": 123.25,
+      "p95": 128.8,
+      "mean": 124.17
     },
     "gateway_overhead_ms": {
       "count": 8,
-      "p50": 1.09,
-      "p95": 1.27,
-      "mean": 1.12
+      "p50": 1.03,
+      "p95": 1.37,
+      "mean": 1.07
     },
     "frames_per_turn": {
       "count": 8,
@@ -1471,7 +4659,7 @@
     "frames": 151,
     "frame_reduction_pct": 49.7,
     "tokens_per_frame": 1.99,
-    "stream_seconds": 3.601,
+    "stream_seconds": 3.537,
     "text_lossless": true,
     "dropped_frames": 0
   },

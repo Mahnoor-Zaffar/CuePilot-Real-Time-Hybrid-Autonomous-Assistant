@@ -190,11 +190,21 @@ class HybridRetriever:
             if len(ranked) == 1:
                 # single retriever: still run through RRF so ordering/provenance match
                 fused_started = time.perf_counter()
-                fused = reciprocal_rank_fusion(ranked, k=self.settings.rrf_k, top_k=top_k)
+                fused = reciprocal_rank_fusion(
+                    ranked,
+                    k=self.settings.rrf_k,
+                    top_k=top_k,
+                    max_chunks_per_doc=self.settings.retrieval_max_chunks_per_doc,
+                )
                 timings["fusion"] = (time.perf_counter() - fused_started) * 1000
             else:
                 fused_started = time.perf_counter()
-                fused = reciprocal_rank_fusion(ranked, k=self.settings.rrf_k, top_k=top_k)
+                fused = reciprocal_rank_fusion(
+                    ranked,
+                    k=self.settings.rrf_k,
+                    top_k=top_k,
+                    max_chunks_per_doc=self.settings.retrieval_max_chunks_per_doc,
+                )
                 timings["fusion"] = (time.perf_counter() - fused_started) * 1000
 
             total_ms = (time.perf_counter() - root.started_at) * 1000

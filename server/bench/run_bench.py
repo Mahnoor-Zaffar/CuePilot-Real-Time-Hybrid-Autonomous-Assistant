@@ -42,13 +42,14 @@ from app.config import Settings  # noqa: E402
 from app.infra.cache import MemoryCache  # noqa: E402
 from app.infra.db import MemoryVectorStore  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.retrieval.corpus import all_documents  # noqa: E402
-from app.retrieval.embedder import HashEmbedder  # noqa: E402
+from app.retrieval.embedder import Embedder  # noqa: E402
 from app.retrieval.orchestrator import HybridRetriever  # noqa: E402
 from app.telemetry.metrics import Metrics  # noqa: E402
 from app.telemetry.otel import TraceRecorder  # noqa: E402
 from app.ws.outbound import OutboundStream  # noqa: E402
-from bench.qrels import QUERIES  # noqa: E402
+from bench.corpus import benchmark_documents  # noqa: E402
+from bench.embedders import DEFAULT_LOCAL_MODEL, build_bench_embedder  # noqa: E402
+from bench.qrels import QUERIES, by_family, families  # noqa: E402
 
 DOCS_DIR = ROOT.parent / "docs"
 TOP_K = 5
@@ -92,24 +93,25 @@ def latency_block(values: list[float]) -> dict[str, float | int | None]:
 
 
 # ── 1 + 2: retrieval quality and latency ───────────────────────────────────
-async def evaluate_retrieval(settings: Settings) -> dict:
+async def evaluate_retrieval(settings: Settings, embedder: Embedder) -> dict:
     metrics = Metrics()
     retriever = HybridRetriever(
         settings,
-        MemoryVectorStore(settings.embedding_dim),
-        HashEmbedder(settings.embedding_dim),
+        MemoryVectorStore(embedder.dim),
+        embedder,
         MemoryCache(),
         metrics,
         TraceRecorder(),
     )
+    documents = benchmark_documents()
     ingest_started = time.perf_counter()
-    ingest = await retriever.ingest(all_documents(include_distractors=True))
+    ingest = await retriever.ingest(documents)
     ingest_ms = (time.perf_counter() - ingest_started) * 1000
 
     report: dict[str, dict] = {}
     for mode in ("bm25", "dense", "hybrid"):
         latencies: list[float] = []
-        families: dict[str, dict[str, float]] = {}
+        family_stats: dict[str, dict[str, float]] = {}
         per_query: list[dict] = []
         hits_at_k = 0
         reciprocal_ranks: list[float] = []
@@ -125,7 +127,7 @@ async def evaluate_retrieval(settings: Settings) -> dict:
             hit = rank is not None
             hits_at_k += int(hit)
             reciprocal_ranks.append(1.0 / rank if rank else 0.0)
-            family = families.setdefault(query.family, {"n": 0, "hits": 0})
+            family = family_stats.setdefault(query.family, {"n": 0, "hits": 0})
             family["n"] += 1
             family["hits"] += int(hit)
             per_query.append(
@@ -146,7 +148,7 @@ async def evaluate_retrieval(settings: Settings) -> dict:
             "latency_ms": latency_block(latencies),
             "by_family": {
                 family: round(values["hits"] / values["n"], 4)
-                for family, values in families.items()
+                for family, values in family_stats.items()
             },
             "per_query": per_query,
         }
@@ -156,10 +158,12 @@ async def evaluate_retrieval(settings: Settings) -> dict:
     hybrid = report["hybrid"]
     best_single = max(bm25["recall_at_5"], dense["recall_at_5"])
     report["summary"] = {
-        "corpus_documents": len(all_documents(include_distractors=True)),
+        "corpus_documents": len(documents),
         "corpus_chunks": ingest["chunks"],
         "ingest_ms": round(ingest_ms, 2),
         "embedder": ingest["embedder"],
+        "queries": len(QUERIES),
+        "queries_by_family": {family: len(by_family(family)) for family in families()},
         "hybrid_vs_best_single_pp": round((hybrid["recall_at_5"] - best_single) * 100, 2),
         "hybrid_vs_dense_pp": round((hybrid["recall_at_5"] - dense["recall_at_5"]) * 100, 2),
         "queries_dense_missed_hybrid_found": sum(
@@ -172,7 +176,32 @@ async def evaluate_retrieval(settings: Settings) -> dict:
             for bm25_q, hybrid_q in zip(bm25["per_query"], hybrid["per_query"], strict=True)
             if bm25_q["rank"] is None and hybrid_q["rank"] is not None
         ),
+        "queries_any_single_found": sum(
+            1
+            for bm25_q, dense_q in zip(bm25["per_query"], dense["per_query"], strict=True)
+            if bm25_q["rank"] is not None or dense_q["rank"] is not None
+        ),
+        "queries_hybrid_found_neither": sum(
+            1
+            for bm25_q, dense_q, hybrid_q in zip(
+                bm25["per_query"], dense["per_query"], hybrid["per_query"], strict=True
+            )
+            if bm25_q["rank"] is None
+            and dense_q["rank"] is None
+            and hybrid_q["rank"] is not None
+        ),
+        "queries_hybrid_lost_from_singles": sum(
+            1
+            for bm25_q, dense_q, hybrid_q in zip(
+                bm25["per_query"], dense["per_query"], hybrid["per_query"], strict=True
+            )
+            if hybrid_q["rank"] is None
+            and (bm25_q["rank"] is not None or dense_q["rank"] is not None)
+        ),
     }
+    summary = report["summary"]
+    summary["union_recall_at_5"] = round(summary["queries_any_single_found"] / len(QUERIES), 4)
+    summary["fusion_gap"] = summary["queries_hybrid_lost_from_singles"]
     return report
 
 
@@ -373,12 +402,38 @@ def render_markdown(report: dict) -> str:
     ttft = report["ttft"]
     coalescing = report["coalescing"]
     bundle = report.get("bundle")
+    family_names = families()
+
     def row(name: str, block: dict) -> str:
+        family_cells = "".join(
+            f"| {block['by_family'][family]:.1%} " for family in family_names
+        )
         return (
             f"| {name} | {block['recall_at_5']:.1%} | {block['mrr']:.3f} "
-            f"| {block['by_family']['identifier']:.1%} | {block['by_family']['paraphrase']:.1%} "
+            f"{family_cells}"
             f"| {block['latency_ms']['p50']} ms | {block['latency_ms']['p95']} ms |"
         )
+
+    family_header = "".join(f"| {family.replace('_', ' ').title()} " for family in family_names)
+    family_rule = "|" + "---|" * (3 + len(family_names) + 2)
+    query_mix = ", ".join(
+        f"{count} {family.replace('_', ' ')}"
+        for family, count in summary["queries_by_family"].items()
+    )
+
+    embedder = summary["embedder"]
+    if embedder.startswith("hash"):
+        embedder_note = (
+            "deterministic lexical proxy over tokens, bigrams and character trigrams; "
+            "not a semantic model"
+        )
+    elif embedder.startswith("model2vec"):
+        embedder_note = (
+            "local static sentence embeddings; a semantic model, used as a stand-in "
+            "for the hosted embedding path"
+        )
+    else:
+        embedder_note = "hosted embeddings"
 
     lines = [
         "# Measured metrics",
@@ -390,20 +445,16 @@ def render_markdown(report: dict) -> str:
         "## Environment",
         "",
         f"- Python {report['environment']['python']} on {report['environment']['platform']}",
-        f"- Embedder: `{summary['embedder']}` "
-        + (
-            "(deterministic offline stand-in; set `CUEPILOT_OPENAI_API_KEY` for real embeddings)"
-            if summary["embedder"].startswith("hash")
-            else "(hosted embeddings)"
-        ),
+        f"- Embedder: `{embedder}` — {embedder_note}",
         f"- Provider for TTFT: `{report['environment']['provider']}`",
         f"- Corpus: {summary['corpus_documents']} documents -> {summary['corpus_chunks']} chunks "
         f"(ingest {summary['ingest_ms']} ms)",
+        f"- Queries: {summary['queries']} labelled ({query_mix})",
         "",
-        "## 1. Retrieval quality (recall@5, 32 labelled queries)",
+        f"## 1. Retrieval quality (recall@5, {summary['queries']} labelled queries)",
         "",
-        "| Retriever | Recall@5 | MRR | Identifier queries | Paraphrase queries | p50 | p95 |",
-        "|---|---|---|---|---|---|---|",
+        f"| Retriever | Recall@5 | MRR {family_header}| p50 | p95 |",
+        family_rule,
         row("BM25 only", bm25),
         row("Dense only", dense),
         row("Hybrid (RRF, k=60)", hybrid),
@@ -412,6 +463,13 @@ def render_markdown(report: dict) -> str:
         f"- Hybrid vs. dense-only: **{summary['hybrid_vs_dense_pp']:+.1f} pp** recall@5",
         f"- Queries dense-only missed that hybrid recovered: **{summary['queries_dense_missed_hybrid_found']}**",
         f"- Queries BM25-only missed that hybrid recovered: **{summary['queries_bm25_missed_hybrid_found']}**",
+        f"- Union recall (either retriever alone answers): "
+        f"**{summary['queries_any_single_found']}/{summary['queries']} "
+        f"({summary['union_recall_at_5']:.1%})**",
+        f"- Fusion gap (a single retriever answered but hybrid lost): "
+        f"**{summary['fusion_gap']}** queries",
+        f"- Queries hybrid recovered that neither single retriever found: "
+        f"**{summary['queries_hybrid_found_neither']}**",
         "",
         "### Failure analysis",
         "",
@@ -490,9 +548,13 @@ def render_markdown(report: dict) -> str:
     lines += [
         "## Caveats",
         "",
-        "- The offline hash embedder measures lexical robustness (word tokens, bigrams,",
-        "  character trigrams), not true semantic similarity. Re-run with a real embedding key",
-        "  before quoting absolute retrieval numbers; the harness is identical.",
+        "- Retrieval numbers depend on the embedder. `--embedder hash` is a deterministic",
+        "  lexical proxy over word tokens, bigrams and character trigrams, not a semantic",
+        "  model; `--embedder local` uses model2vec static sentence embeddings; `--embedder",
+        "  openai` uses hosted embeddings. The retrieval code under test is identical.",
+        "- The evaluation corpus is synthetic and larger than the demo knowledge base. It is",
+        "  built to contain hard negatives, so absolute recall is lower than on the demo KB by",
+        "  design. Treat it as a regression baseline, not a claim about your domain.",
         "- TTFT is measured over the in-process ASGI transport to remove loopback noise. Real",
         "  network RTT adds to the client-observed number.",
         "- Hosted-provider TTFT depends on the provider and model, not on this gateway. The",
@@ -504,12 +566,42 @@ def render_markdown(report: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="write docs/METRICS.md")
+    parser.add_argument(
+        "--out",
+        default="METRICS.md",
+        help="markdown filename under docs/ (default: METRICS.md); "
+        "the JSON sidecar is named to match",
+    )
     parser.add_argument("--skip-ttft", action="store_true")
+    parser.add_argument(
+        "--embedder",
+        choices=["hash", "local", "openai"],
+        default="hash",
+        help=(
+            "hash: deterministic lexical proxy (default, no dependencies); "
+            "local: model2vec static sentence embeddings; "
+            "openai: hosted embeddings (requires CUEPILOT_OPENAI_API_KEY)"
+        ),
+    )
+    parser.add_argument(
+        "--embedder-model",
+        default=DEFAULT_LOCAL_MODEL,
+        help=f"model2vec model for --embedder local (default: {DEFAULT_LOCAL_MODEL})",
+    )
     args = parser.parse_args()
 
     settings = bench_settings()
-    print("evaluating retrieval...", file=sys.stderr)
-    retrieval = asyncio.run(evaluate_retrieval(settings))
+    embedder = build_bench_embedder(
+        args.embedder,
+        dim=settings.embedding_dim,
+        api_key=settings.openai_api_key,
+        base_url=settings.embedding_base_url,
+        model=settings.embedding_model,
+        timeout_s=settings.embedding_timeout_s,
+        local_model=args.embedder_model,
+    )
+    print(f"evaluating retrieval with {embedder.name}...", file=sys.stderr)
+    retrieval = asyncio.run(evaluate_retrieval(settings, embedder))
 
     ttft = {"turns": 0}
     if not args.skip_ttft:
@@ -540,9 +632,11 @@ def main() -> int:
 
     markdown = render_markdown(report)
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    (DOCS_DIR / "metrics.json").write_text(json.dumps(report, indent=2))
+    stem = args.out[:-3] if args.out.endswith(".md") else args.out
+    json_name = f"{stem.replace('METRICS', 'metrics')}.json"
+    (DOCS_DIR / json_name).write_text(json.dumps(report, indent=2))
     if args.write:
-        (DOCS_DIR / "METRICS.md").write_text(markdown)
+        (DOCS_DIR / args.out).write_text(markdown)
     print(markdown)
     return 0
 

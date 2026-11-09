@@ -121,8 +121,10 @@ score(d) = Σ_r  weight_r / (k + rank_r(d)),   k = 60
 
 RRF is chosen over a cross-encoder because it needs no training, no second forward pass,
 and is invariant to the score scales of BM25 and cosine. Candidate pool is 50 per retriever;
-the fused list is truncated to `retrieval_top_k` (8). Each `FusedHit` keeps the ranks and
-contributions that produced it, which is what the UI's source cards display.
+the fused list is truncated to `retrieval_top_k` (8), and a document may contribute at most
+`retrieval_max_chunks_per_doc` chunks (default 1) so one long document cannot fill the
+window. Each `FusedHit` keeps the ranks and contributions that produced it, which is what
+the UI's source cards display.
 
 A single-retriever mode still runs through RRF so ordering and provenance shapes are
 identical across modes.

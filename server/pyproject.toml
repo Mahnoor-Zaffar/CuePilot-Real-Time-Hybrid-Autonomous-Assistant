@@ -23,6 +23,11 @@ dev = [
     "ruff>=0.7.0",
     "websockets>=13.0",
 ]
+# Only needed for `bench/run_bench.py --embedder local`. Kept out of dev so CI
+# and the test suite never download a model.
+bench = [
+    "model2vec>=0.7.0",
+]
 
 [build-system]
 requires = ["hatchling"]

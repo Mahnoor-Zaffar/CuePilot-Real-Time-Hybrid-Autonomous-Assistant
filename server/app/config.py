@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     retrieval_cache_ttl_s: int = 120
     retrieval_timeout_s: float = 6.0
     rrf_k: int = 60
+    # Cap how many chunks a single document may contribute to the fused top-k.
+    # Without this, one long document fills every slot and crowds out the answer.
+    retrieval_max_chunks_per_doc: int = 1
     bm25_k1: float = 1.5
     bm25_b: float = 0.75
     chunk_max_chars: int = 900
