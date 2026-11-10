@@ -22,6 +22,8 @@ degradation instead of hiding it.
 | One retriever fails | gather exception | fuse the other; `degraded` list | next query |
 | Both retrievers fail | empty ranked set | answer without context, `degraded` | next query |
 | Postgres down at boot | probe timeout | in-memory vector store | automatic |
+| Schema drift / bad DDL | checksum + DDL error | **startup fails**, no degraded fallback | fix the migration |
+| Embedding width changed | recorded render params | rebuild via `.down.sql`, bump KB version | automatic |
 | Postgres lost mid-run | query exception | dense degrades to BM25 | reconnect |
 | Redis down | probe timeout | in-process cache/bus | automatic |
 | KB ingest during session | version bump | new cache key + bus invalidation | next turn |
@@ -200,6 +202,24 @@ the current process. This is reported in `/api/health` as a degraded bus.
 continues, `seed_on_start` ingests the corpus into memory, and health reports
 `"status": "degraded"`. Retrieval quality is unchanged for this corpus; durability is lost.
 
+### Schema migration failure
+
+`build_store` applies pending migrations before the store is usable. The runner holds
+`pg_advisory_lock(hashtext('cuepilot:migrations'))` for the whole run, so replicas that boot
+together serialise instead of racing; the losers find the work already recorded.
+
+Startup fails — it does **not** degrade to the memory store — when:
+
+- an already-applied file's checksum changed (someone edited history): add a new migration;
+- a parameter changed and the migration has no `.down.sql` (pgvector cannot cast between
+  vector widths, so a width change must be a rebuild);
+- the DDL itself fails, for example `CREATE EXTENSION vector` without privileges.
+
+A parameter change is expected, not an error. The runner applies the down file (drops the
+derived `kb_chunks`, bumps `kb_meta.version` so retrieval cache entries keyed on the old
+vectors miss), re-runs the file at the new width, and boot re-ingests the corpus. The first
+boot after a switch costs one ingest; nothing durable is lost because `kb_chunks` is derived.
+
 ### Postgres lost after startup
 
 `PgVectorStore` queries raise. Dense retrieval is marked degraded and BM25 keeps serving
@@ -278,7 +298,8 @@ applied when the tab is visible again; it is not dropped.
 
 - No per-client rate limiting; one client can open many sockets.
 - No durable turn journal, so a mid-turn restart loses the partial answer.
-- No schema migration tool; `deploy/init.sql` is idempotent but assumes a fresh database.
 - Metrics are per worker; no aggregation across replicas.
 - The desktop system-audio path is stubbed; only microphone capture is implemented.
 - Session history is capped and stored in Redis only; eviction silently ends resume.
+- The retrieval corpus is synthetic. Intervals quantify sampling noise on this label set,
+  not fit to any real domain.

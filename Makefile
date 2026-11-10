@@ -10,8 +10,9 @@ PIP := server/.venv/bin/pip
 RUFF := server/.venv/bin/ruff
 UVICORN := server/.venv/bin/uvicorn
 
-.PHONY: help setup setup-server setup-desktop setup-tools up down logs dev server desktop test lint \
-        typecheck build docs-check bench bench-semantic seed metrics measure-idle check clean
+.PHONY: help setup setup-server setup-desktop setup-tools up down logs migrate dev server desktop test \
+        test-local lint typecheck build docs-check bench bench-semantic seed metrics measure-idle \
+        check clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -24,6 +25,7 @@ setup: setup-server setup-desktop setup-tools ## Install server, desktop, and to
 setup-server: ## Create server/.venv and install deps
 	@command -v uv >/dev/null 2>&1 || { echo "uv is required: https://docs.astral.sh/uv/"; exit 1; }
 	cd server && uv venv --python 3.12 && uv pip install -e ".[dev]"
+	@echo "tip: 'cd server && uv sync --extra local' adds the offline semantic embedder"
 
 setup-desktop: ## Install desktop dependencies
 	cd desktop && npm install
@@ -41,6 +43,9 @@ down: ## Stop infrastructure (volumes are kept)
 
 logs: ## Follow infrastructure logs
 	docker compose logs -f
+
+migrate: ## Apply SQL migrations without booting the gateway
+	cd server && .venv/bin/python scripts/migrate.py
 
 # ── run ──────────────────────────────────────────────────────────────────────
 dev: ## Run gateway + desktop app together
@@ -64,6 +69,9 @@ seed: ## Re-ingest the knowledge base into the configured vector store
 test: ## Run the server test suite
 	cd server && .venv/bin/python -m pytest -q
 
+test-local: ## Run the local semantic embedder tests (needs: uv sync --extra local)
+	cd server && .venv/bin/python -m pytest -q -m local
+
 lint: ## Ruff lint
 	cd server && .venv/bin/ruff check .
 
@@ -84,6 +92,9 @@ bench: ## Regenerate docs/metrics.json (retrieval, TTFT, coalescing, bundle, idl
 
 bench-semantic: ## Retrieval benchmark with a real semantic embedder (needs the bench extra)
 	cd server && .venv/bin/python bench/run_bench.py --write --embedder local --out METRICS.semantic.md
+
+bench-quick: ## Retrieval benchmark, fewer bootstrap resamples (faster, wider intervals)
+	cd server && .venv/bin/python bench/run_bench.py --skip-ttft --bootstrap 400
 
 measure-idle: ## Measure desktop idle footprint into desktop/bench/idle.json
 	cd desktop && npm run measure-idle

@@ -1,6 +1,6 @@
 {
   "environment": {
-    "timestamp": "2026-11-09 18:17 UTC",
+    "timestamp": "2026-11-10 07:32 UTC",
     "python": "3.12.13",
     "platform": "Darwin x86_64",
     "provider": "mock (deterministic)",
@@ -10,14 +10,30 @@
   "retrieval": {
     "bm25": {
       "recall_at_5": 0.87,
+      "recall_at_5_ci": {
+        "point": 0.87,
+        "low": 0.8,
+        "high": 0.93,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "mrr": 0.7675,
+      "mrr_ci": {
+        "point": 0.7675,
+        "low": 0.6941,
+        "high": 0.84,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "hits": 87,
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 0.75,
-        "p95": 1.18,
-        "mean": 0.8
+        "p50": 0.81,
+        "p95": 1.27,
+        "mean": 0.85
       },
       "by_family": {
         "identifier": 1.0,
@@ -1530,14 +1546,30 @@
     },
     "dense": {
       "recall_at_5": 0.81,
+      "recall_at_5_ci": {
+        "point": 0.81,
+        "low": 0.73,
+        "high": 0.89,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "mrr": 0.6745,
+      "mrr_ci": {
+        "point": 0.6745,
+        "low": 0.6,
+        "high": 0.7558,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "hits": 81,
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 1.18,
-        "p95": 1.36,
-        "mean": 1.33
+        "p50": 1.35,
+        "p95": 1.91,
+        "mean": 1.53
       },
       "by_family": {
         "identifier": 1.0,
@@ -3065,14 +3097,30 @@
     },
     "hybrid": {
       "recall_at_5": 0.88,
+      "recall_at_5_ci": {
+        "point": 0.88,
+        "low": 0.81,
+        "high": 0.94,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "mrr": 0.7907,
+      "mrr_ci": {
+        "point": 0.7907,
+        "low": 0.7185,
+        "high": 0.86,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "hits": 88,
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 1.69,
-        "p95": 2.23,
-        "mean": 1.76
+        "p50": 1.79,
+        "p95": 2.78,
+        "mean": 2.42
       },
       "by_family": {
         "identifier": 1.0,
@@ -4601,7 +4649,7 @@
     "summary": {
       "corpus_documents": 412,
       "corpus_chunks": 796,
-      "ingest_ms": 410.66,
+      "ingest_ms": 517.82,
       "embedder": "model2vec:potion-base-8M",
       "queries": 100,
       "queries_by_family": {
@@ -4616,6 +4664,35 @@
       "queries_any_single_found": 92,
       "queries_hybrid_found_neither": 1,
       "queries_hybrid_lost_from_singles": 5,
+      "best_single": "bm25",
+      "hybrid_vs_bm25": {
+        "point": 0.01,
+        "low": -0.04,
+        "high": 0.07,
+        "n": 100,
+        "resamples": 2000,
+        "paired": true
+      },
+      "hybrid_vs_dense": {
+        "point": 0.07,
+        "low": 0.01,
+        "high": 0.1302,
+        "n": 100,
+        "resamples": 2000,
+        "paired": true
+      },
+      "hybrid_vs_best_single": {
+        "point": 0.01,
+        "low": -0.04,
+        "high": 0.07,
+        "n": 100,
+        "resamples": 2000,
+        "paired": true
+      },
+      "bootstrap": {
+        "resamples": 2000,
+        "seed": 7
+      },
       "union_recall_at_5": 0.92,
       "fusion_gap": 5
     }
@@ -4626,20 +4703,20 @@
     "client_ttft_ms": {
       "count": 8,
       "p50": 124.17,
-      "p95": 130.07,
-      "mean": 124.91
+      "p95": 134.95,
+      "mean": 125.55
     },
     "server_ttft_ms": {
       "count": 8,
-      "p50": 123.06,
-      "p95": 128.96,
-      "mean": 123.84
+      "p50": 123.13,
+      "p95": 133.58,
+      "mean": 124.42
     },
     "gateway_overhead_ms": {
       "count": 8,
-      "p50": 1.08,
-      "p95": 1.16,
-      "mean": 1.07
+      "p50": 1.04,
+      "p95": 1.37,
+      "mean": 1.13
     },
     "frames_per_turn": {
       "count": 8,
@@ -4659,7 +4736,7 @@
     "frames": 151,
     "frame_reduction_pct": 49.7,
     "tokens_per_frame": 1.99,
-    "stream_seconds": 3.547,
+    "stream_seconds": 3.648,
     "text_lossless": true,
     "dropped_frames": 0
   },

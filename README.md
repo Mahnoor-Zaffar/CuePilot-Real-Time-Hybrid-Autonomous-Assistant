@@ -157,6 +157,7 @@ pending text before applying `done`/`error`/`aborted`/`history`. Deltas carry a 
 | One retriever can be down | `gather(return_exceptions=True)`; fuse the survivor and report `degraded` | `orchestrator.py` |
 | A mid-stream retry would duplicate text | Retries and model fallback happen **only before the first token** | `openrouter.py`, `registry.py` |
 | Postgres/Redis may not exist | In-process exact-cosine store and TTL cache/bus with identical interfaces | `infra/db.py`, `infra/cache.py`, `infra/bus.py` |
+| Schema and embedding width can drift | Templated SQL, advisory-locked runner; a parameter change rebuilds through a down file | `infra/migrations.py`, `app/migrations/` |
 
 ---
 
@@ -173,17 +174,21 @@ The evaluation corpus is deliberately larger and harder than the demo knowledge 
 identifiers, queried by **100 hand-labelled queries** (30 identifier, 54 paraphrase,
 16 near-miss).
 
-| Retrieval metric (recall@5) | Hash proxy | Semantic (`model2vec`) |
+| Retrieval metric (recall@5, 100 queries) | Hash proxy | Semantic (`model2vec`) |
 |---|---|---|
-| BM25 only | 87.0% | 87.0% |
-| Dense only | 83.0% | 81.0% |
-| **Hybrid (RRF, k=60)** | **87.0%** | **88.0%** |
-| Hybrid vs. best single retriever | +0.0 pp | **+1.0 pp** |
-| Hybrid vs. dense only | +4.0 pp | **+7.0 pp** |
+| BM25 only | 87.0% [80–93] | 87.0% [80–93] |
+| Dense only | 83.0% [76–90] | 81.0% [73–89] |
+| **Hybrid (RRF, k=60)** | **87.0%** [81–93] | **88.0%** [81–94] |
+| Hybrid vs. best single retriever | +0.0 pp [−5, +5] | +1.0 pp [−4, +7] |
+| Hybrid vs. dense only | +4.0 pp [0, +9] | **+7.0 pp [+1, +13]** |
 | Paraphrase recall (BM25 → hybrid) | 75.9% → 77.8% | 75.9% → 77.8% |
 | Union recall (either single retriever answers) | 89.0% | **92.0%** |
 | Fusion gap (single retriever found, hybrid lost) | 4 | 5 |
-| Retrieval latency, hybrid p50 / p95 | 1.9 / 2.5 ms | 1.7 / 2.2 ms |
+| Retrieval latency, hybrid p50 / p95 | 2.1 / 2.8 ms | 1.8 / 2.8 ms |
+
+Brackets are 95% percentile-bootstrap intervals over the 100 labelled queries
+(2,000 resamples, paired for comparisons). One query is 1 pp, so read the interval,
+not the point.
 
 | System metric | Result |
 |---|---|
@@ -199,17 +204,26 @@ identifiers, queried by **100 hand-labelled queries** (30 identifier, 54 paraphr
 - **TTFT is a gateway claim, not a model claim.** With a deterministic mock whose first byte
   is fixed at 120 ms, the client sees ~124 ms and the gateway adds ~1 ms. A hosted model's
   TTFT is provider-dependent; the defensible column is the overhead.
+- **The hybrid edge over BM25 is inside the noise band; the edge over dense is not.**
+  With 100 queries, 1 pp is one query. The paired bootstrap puts hybrid − BM25 at
+  +1.0 pp with a 95% CI of −4 to +7 (semantic) and +0.0 pp with −5 to +5 (hash); both
+  include zero. Hybrid − dense is +7.0 pp [+1, +13], which does exclude zero. So the
+  defensible claim is "fusion recovers queries dense alone misses", not "hybrid beats
+  BM25". The interval is part of the result, not a disclaimer.
 - **The +15–25% hybrid target is not reproduced, and the reason is now measurable.**
   With a real semantic embedder hybrid beats the best single retriever by **+1.0 pp**
-  (88.0% vs 87.0%). The two retrievers are strongly complementary — at least one answers
-  **92 of 100** queries — but unweighted RRF captures only 88, so **fusion, not coverage,
-  is the bottleneck**. On this identifier-dense KB BM25 already reaches 87%, leaving
-  13 pp of headroom; a 15–25% *relative* lift is not available without a better fusion
-  rule or a reranker. The measured +1.0 pp is reported rather than a tuned number.
-- **A semantic embedder is what makes the dense column meaningful.** With the lexical
-  hash proxy the hybrid is +0.0 pp over BM25; with `model2vec` it is +1.0 pp over BM25
-  and +7.0 pp over dense-only, and near-miss recall returns to 100%. The hash embedder is
-  a zero-dependency reproducibility default, not a semantic retriever.
+  (88.0% vs 87.0%), an interval that includes zero. The two retrievers are strongly
+  complementary — at least one answers **92 of 100** queries — but unweighted RRF
+  captures only 88, so **fusion, not coverage, is the bottleneck**. On this
+  identifier-dense KB BM25 already reaches 87%, leaving 13 pp of headroom; a 15–25%
+  *relative* lift is not available without a better fusion rule or a reranker. The
+  measured +1.0 pp, with its interval, is reported rather than a tuned number.
+- **The semantic embedder is a runtime path, not a benchmark-only stand-in.**
+  `CUEPILOT_EMBEDDING_PROVIDER=local` runs `model2vec` inside the gateway. The schema
+  width follows the model (`VECTOR(256)` for `potion-base-8M`), and switching back to
+  the hash or hosted path rebuilds the derived table through a down migration. With
+  the lexical hash proxy the hybrid is +0.0 pp over BM25; with `model2vec` it is
+  +1.0 pp over BM25 and +7.0 pp over dense-only, and near-miss recall returns to 100%.
 - **The expanded benchmark exposed a real retrieval bug, now fixed.** A long document
   could contribute several chunks and fill the top-5, crowding the answer out; fusion now
   caps chunks per document (`retrieval_max_chunks_per_doc`, default 1). That is a product
@@ -296,17 +310,27 @@ Every setting is `CUEPILOT_<UPPER_SNAKE>`; the full reference is [`.env.example`
 | `CUEPILOT_LLM_MODEL` | `openai/gpt-4o-mini` | Primary model |
 | `CUEPILOT_LLM_FALLBACK_MODELS` | 2 models | Tried in order before the first token |
 | `CUEPILOT_OPENAI_API_KEY` | unset | Real embeddings + Whisper transcription |
-| `CUEPILOT_DATABASE_URL` | `…@127.0.0.1:5433/cuepilot` | pgvector store |
+| `CUEPILOT_EMBEDDING_PROVIDER` | `auto` | `auto` \| `openai` \| `hash` \| `local` (`local` = offline `model2vec`) |
+| `CUEPILOT_LOCAL_EMBEDDING_MODEL` | `minishlab/potion-base-8M` | Static model for the `local` provider |
+| `CUEPILOT_DATABASE_URL` | `…@127.0.0.1:5433/cuepilot` | pgvector store; migrated on boot |
 | `CUEPILOT_REDIS_URL` | `redis://127.0.0.1:6380/0` | Cache, pub/sub, session mirror |
 | `CUEPILOT_ALLOW_DEGRADED_INFRA` | `true` | Fall back instead of failing startup |
 | `CUEPILOT_OTEL_EXPORTER` | `none` | `none` \| `console` \| `otlp` |
+
+The schema is owned by `server/app/migrations/` and applied on boot under a Postgres
+advisory lock, so replicas can start together. A parameter change — today, the embedding
+width — is a rebuild: the runner applies the matching `.down.sql`, re-runs the file, and
+bumps `kb_meta.version` so cached results keyed on the old vectors are dropped. Run it as
+its own step with `make migrate`. Editing an already-applied file fails startup by design.
 
 ---
 
 ## Quality gates
 
 ```bash
-make check        # ruff + tsc (renderer and electron) + 74 tests + docs gate
+make check        # ruff + tsc (renderer and electron) + 107 tests + docs gate
+make test-local   # real semantic embedder tests (needs: cd server && uv sync --extra local)
+make migrate      # apply SQL migrations without booting the gateway
 make bench        # regenerate docs/metrics.json and docs/METRICS.md
 make measure-idle # desktop idle footprint -> desktop/bench/idle.json
 make metrics      # measure-idle, then bench
@@ -314,10 +338,13 @@ make metrics      # measure-idle, then bench
 
 `make check` runs the same steps as CI. The workflow in
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) fans them out: the server suite on
-Python 3.11 and 3.12 against the locked `uv.lock`, the renderer typecheck and production
-build on Node 22, and a docs gate that parses every Mermaid diagram and resolves every
-relative link. `scripts/check-docs.mjs` uses mermaid's own grammar under jsdom, so a broken
-diagram fails the build instead of shipping as a broken image.
+Python 3.11 and 3.12 against the locked `uv.lock`, a migration job against a real
+`pgvector` service (apply, idempotent re-run, dimension rebuild, two replicas racing),
+a job that installs the `local` extra and exercises the real semantic embedder, the
+renderer typecheck and production build on Node 22, and a docs gate that parses every
+Mermaid diagram and resolves every relative link. `scripts/check-docs.mjs` uses mermaid's
+own grammar under jsdom, so a broken diagram fails the build instead of shipping as a
+broken image.
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) gates both artefacts on the
 test suite, then publishes the multi-arch image to GHCR and cross-builds both DMGs on
@@ -366,21 +393,22 @@ server/
   app/
     ws/           protocol · connection lifecycle · coalescing writer · sessions · audio
     llm/          provider interface · OpenRouter SSE · mock · fallback chain · agent · tools
-    retrieval/    tokenizer · BM25 · embedder · chunking · RRF · orchestrator · corpus
-    infra/        cache · event bus · pgvector / memory vector store
+    retrieval/    tokenizer · BM25 · embedder (hash/http/local) · chunking · RRF · orchestrator
+    infra/        cache · event bus · pgvector / memory store · migration runner
+    migrations/   numbered SQL up/down files (schema lives here)
     telemetry/    metrics registry · OTel spans · in-memory trace ring
     api/          health · KB ingest/search/stats · metrics · traces
-  bench/          reproducible harness + 100 labelled queries
-  tests/          74 tests
+  bench/          reproducible harness · 100 labelled queries · bootstrap stats
+  scripts/        migrate.py (apply schema without booting)
+  tests/          107 tests
   Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
 desktop/
   src/            React UI + useCueStream (the entire client transport)
   electron/       main process (hotkeys, clipboard, CSP) + contextBridge preload
   scripts/        measure-idle.cjs
-deploy/           pgvector schema, HNSW index, version row
 docs/             architecture · protocol · failure modes · generated metrics
 scripts/          check-docs.mjs (mermaid + link gate)
-.github/          CI (server matrix · desktop build · docs gate) and release (GHCR + dmg)
+.github/          CI (server matrix · migrations · local embedder · desktop · docs) and release
 ```
 
 ---
@@ -429,16 +457,25 @@ current single-active-turn rule is a deliberate simplification.
 
 ## Limitations
 
+**Not built yet** — the next slices:
+
 - The desktop app is a **client skeleton**: shell, streaming transport, and UI are complete;
   system-audio capture is stubbed in the main process (microphone capture is real).
   Packaging and notarization are not wired up.
-- The mock provider and hash embedder are test doubles. They make the repo reproducible
-  offline; they are not a model or a semantic encoder.
 - Sessions are mirrored to Redis, not durably stored. Eviction ends resume; the socket still
-  works and starts a new session.
-- The benchmark corpus is small and synthetic. Treat absolute retrieval numbers as a
-  regression baseline, not a claim about your domain.
-- No schema migration tool; `deploy/init.sql` is idempotent but assumes a fresh database.
+  works and starts a new session. A Postgres turn journal is the fix.
+- The benchmark corpus is synthetic. The bootstrap intervals say how much of a difference
+  this label set can resolve; they say nothing about your domain. A BEIR subset would add
+  an external reference point.
+
+**Test doubles, kept on purpose:**
+
+- `MockProvider` is a deterministic double. It exists so the suite and the offline demo are
+  reproducible; it is not a model. The semantic path itself is real:
+  `CUEPILOT_EMBEDDING_PROVIDER=local` runs `model2vec` in the gateway, and `HttpEmbedder`
+  runs hosted embeddings when a key is set. Both are exercised in CI.
+- The hash embedder remains the zero-dependency default. It is a lexical proxy, labelled as
+  such everywhere, and never presented as a semantic encoder.
 
 ---
 

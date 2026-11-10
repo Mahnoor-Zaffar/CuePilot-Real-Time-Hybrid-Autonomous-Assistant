@@ -17,6 +17,7 @@ import asyncpg
 import numpy as np
 
 from app.config import Settings
+from app.infra.migrations import MigrationError, run_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,20 @@ class PgVectorStore:
         await self._pool.close()
 
 
-async def build_store(settings: Settings) -> tuple[VectorStore, str]:
+async def build_store(settings: Settings, dim: int | None = None) -> tuple[VectorStore, str]:
+    """Open the store, migrating the schema first.
+
+    `dim` comes from the embedder that will actually be used, which is not
+    necessarily `settings.embedding_dim` (a local model declares its own width).
+
+    Two failure classes, handled differently on purpose:
+
+    * cannot connect -> degrade to memory (the demo still runs);
+    * connected but the schema will not migrate -> fatal, even with
+      `allow_degraded_infra=true`, because a memory fallback would hide a broken
+      schema behind numbers that look fine.
+    """
+    dim = dim or settings.embedding_dim
     try:
         pool = await asyncio.wait_for(
             asyncpg.create_pool(
@@ -271,14 +285,23 @@ async def build_store(settings: Settings) -> tuple[VectorStore, str]:
             ),
             timeout=settings.infra_probe_timeout_s * 3,
         )
-        assert pool is not None
-        store = PgVectorStore(pool, settings.embedding_dim)
-        await store.version()  # verifies schema exists
-        return store, ""
     except Exception as exc:  # noqa: BLE001
         if not settings.allow_degraded_infra:
             raise
         logger.info("vector store degraded to in-memory: %s", exc)
-        return MemoryVectorStore(settings.embedding_dim), (
-            f"postgres unavailable ({type(exc).__name__})"
-        )
+        return MemoryVectorStore(dim), f"postgres unavailable ({type(exc).__name__})"
+
+    assert pool is not None
+    try:
+        await run_migrations(pool, params={"embedding_dim": dim})
+        store = PgVectorStore(pool, dim)
+        await store.version()  # verifies the schema is queryable
+        return store, ""
+    except MigrationError:
+        await pool.close()
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # A long index build can hit the pool's command_timeout. Surface it as a
+        # schema failure; `make migrate` runs unbounded for heavy migrations.
+        await pool.close()
+        raise MigrationError(f"schema migration failed: {exc}") from exc

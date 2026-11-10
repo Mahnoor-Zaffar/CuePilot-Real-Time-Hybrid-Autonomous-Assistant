@@ -2,10 +2,17 @@
 
 * `HttpEmbedder` - any OpenAI-compatible `/embeddings` endpoint (OpenAI itself,
   Azure, a local TEI server, ...). Used when a key is configured.
+* `LocalEmbedder` - static sentence embeddings via `model2vec` (distilled token
+  embeddings, no transformer forward pass, no PyTorch). Genuinely semantic and
+  fully offline after the first download, so the dense path can be real without
+  a cloud key. Optional dependency: install the `local` extra.
 * `HashEmbedder` - deterministic signed feature hashing over word tokens,
   bigrams and character trigrams. No network, no model download; it keeps the
   dense layer, RRF and the benchmarks fully exercisable offline. Documented as
   a stand-in, never presented as a semantic model.
+
+All three expose the same interface, so nothing downstream branches on which
+one is configured.
 """
 
 from __future__ import annotations
@@ -19,6 +26,9 @@ import httpx
 import numpy as np
 
 from app.retrieval.tokenize import char_ngrams, tokenize
+
+DEFAULT_LOCAL_MODEL = "minishlab/potion-base-8M"
+DEFAULT_DIM = 1536
 
 
 class Embedder(Protocol):
@@ -133,6 +143,41 @@ class HttpEmbedder:
         return (await self.embed_documents([text]))[0]
 
 
+class LocalEmbedder:
+    """Static sentence embeddings via model2vec. Optional dependency.
+
+    Model loading happens in the constructor because the model's width decides
+    the `VECTOR(n)` column type, and the schema has to be migrated before the
+    first write. Loading is ~1 s and happens once at boot.
+    """
+
+    def __init__(self, model_name: str = DEFAULT_LOCAL_MODEL) -> None:
+        try:
+            from model2vec import StaticModel
+        except ImportError as exc:  # pragma: no cover - depends on the optional extra
+            raise RuntimeError(
+                "the local embedder needs the optional dependency: install it with "
+                "`uv sync --extra local` (or `--extra bench`), or set "
+                "CUEPILOT_EMBEDDING_PROVIDER=hash"
+            ) from exc
+        self.model_name = model_name
+        self._model = StaticModel.from_pretrained(model_name)
+        self.name = f"model2vec:{model_name.rsplit('/', 1)[-1]}"
+        self.dim = int(self._model.dim)
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._model.encode(texts, show_progress_bar=False)
+        return np.asarray(vectors, dtype=np.float32).tolist()
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return await asyncio.to_thread(self._encode, texts)
+
+    async def embed_query(self, text: str) -> list[float]:
+        return (await self.embed_documents([text]))[0]
+
+
 def build_embedder(
     mode: str,
     *,
@@ -141,9 +186,12 @@ def build_embedder(
     base_url: str,
     model: str,
     timeout_s: float,
+    local_model: str = DEFAULT_LOCAL_MODEL,
 ) -> Embedder:
+    if mode == "local":
+        return LocalEmbedder(local_model)
     if mode == "openai" and api_key:
         return HttpEmbedder(
             base_url=base_url, api_key=api_key, model=model, dim=dim, timeout_s=timeout_s
         )
-    return HashEmbedder(dim=dim)
+    return HashEmbedder(dim=dim or DEFAULT_DIM)

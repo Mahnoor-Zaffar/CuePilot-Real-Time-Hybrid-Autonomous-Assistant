@@ -54,9 +54,9 @@ class Runtime:
         recorder = configure_tracing(settings)
         cache, cache_reason = await build_cache(settings)
         bus, bus_reason = await build_bus(settings)
-        store, store_reason = await build_store(settings)
-        degraded = [reason for reason in (cache_reason, bus_reason, store_reason) if reason]
 
+        # The embedder is built first: a local model declares its own width, and
+        # the store's schema is migrated to that width before the first write.
         embedder = build_embedder(
             settings.embedding_mode,
             dim=settings.embedding_dim,
@@ -64,7 +64,11 @@ class Runtime:
             base_url=settings.embedding_base_url,
             model=settings.embedding_model,
             timeout_s=settings.embedding_timeout_s,
+            local_model=settings.local_embedding_model,
         )
+        store, store_reason = await build_store(settings, dim=embedder.dim)
+        degraded = [reason for reason in (cache_reason, bus_reason, store_reason) if reason]
+
         retriever = HybridRetriever(settings, store, embedder, cache, metrics, recorder)
         provider = build_provider(settings, metrics)
         tools = ToolRegistry(retriever, settings, metrics, recorder)
@@ -96,13 +100,16 @@ class Runtime:
         await self.sessions.start()
         self._bus_task = asyncio.create_task(self._bus_loop(), name="event-bus")
         logger.info(
-            "runtime ready instance=%s provider=%s model=%s store=%s cache=%s chunks=%s degraded=%s",
+            "runtime ready instance=%s provider=%s model=%s store=%s cache=%s chunks=%s "
+            "embedder=%s dim=%s degraded=%s",
             self.instance_id,
             self.provider.name,
             self.provider.model,
             self.store.backend,
             self.cache.backend,
             await self.store.count(),
+            self.retriever.embedder.name,
+            self.retriever.embedder.dim,
             self.degraded or "none",
         )
 
@@ -170,6 +177,7 @@ class Runtime:
                 "bus": self.bus.backend,
                 "vector_store": self.store.backend,
                 "embedder": self.retriever.embedder.name,
+                "embedding_dim": self.retriever.embedder.dim,
             },
             "provider": {"mode": self.provider.name, "model": self.provider.model},
             "kb": {

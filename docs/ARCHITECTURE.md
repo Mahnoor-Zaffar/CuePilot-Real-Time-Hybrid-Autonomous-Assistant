@@ -44,7 +44,8 @@ packaging/notarization.
 │  HybridRetriever (retrieval/orchestrator.py)  Provider (llm/registry.py)              │
 │    BM25 ∥ dense → RRF                         OpenRouter SSE │ Mock │ FallbackChain    │
 │         │                                    │                                        │
-│  Infra: Redis cache + pub/sub · pgvector / memory store · hash / HTTP embedder        │
+│  Infra: Redis cache + pub/sub · pgvector / memory store · hash / HTTP / local embedder  │
+│  Schema: numbered SQL migrations, advisory-locked, applied at boot                     │
 │  Telemetry: OTel spans + bounded in-memory trace ring                                 │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -105,13 +106,34 @@ stall the event loop.
 
 - `HttpEmbedder`: any OpenAI-compatible `/embeddings` endpoint, batched 64 at a time with
   retries and a dimension check.
+- `LocalEmbedder`: `model2vec` static sentence embeddings — distilled token vectors, no
+  transformer forward pass, no PyTorch. Selected with
+  `CUEPILOT_EMBEDDING_PROVIDER=local`; the model's own width becomes the schema width.
+  This is a real semantic encoder, and the same class the benchmark uses, so the offline
+  path and the measured path are the same code.
 - `HashEmbedder`: deterministic signed feature hashing over word unigrams (sublinear tf),
   bigrams, and character trigrams. It is a **stand-in**, not a semantic model; it exists so
-  the dense path, RRF, and benchmarks run offline.
+  the dense path, RRF, and benchmarks run offline with no download.
 
 `PgVectorStore` uses cosine distance (`<=>`) with an HNSW index (`m=16`,
 `ef_construction=64`). `MemoryVectorStore` does exact cosine over a NumPy matrix; it is
 correct and fast below ~100k chunks, and it is the fallback when Postgres is unreachable.
+
+### Schema and migrations
+
+`app/migrations/NNN_name.sql` is the source of truth. `infra/migrations.py` applies files in
+order under `pg_advisory_lock`, recording `version`, `checksum`, and the parameters each
+file was rendered with in `schema_migrations`. Two consequences worth knowing:
+
+- **Editing an applied file fails startup.** Add `002_...sql` instead.
+- **Changing a parameter is a rebuild.** `{{embedding_dim}}` lives in `VECTOR(n)`, which
+  pgvector cannot cast between widths, so the runner applies the matching `.down.sql`
+  (drop the derived table, bump `kb_meta.version`), re-runs the file, and lets boot
+  re-ingest. No down file means a hard error, never a silent no-op.
+
+The gateway migrates before serving; `python scripts/migrate.py` does the same as its own
+step. A migration failure is fatal even when `allow_degraded_infra=true`: falling back to
+memory would hide a broken schema.
 
 ### Fusion
 

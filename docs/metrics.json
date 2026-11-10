@@ -1,6 +1,6 @@
 {
   "environment": {
-    "timestamp": "2026-11-09 18:17 UTC",
+    "timestamp": "2026-11-10 07:32 UTC",
     "python": "3.12.13",
     "platform": "Darwin x86_64",
     "provider": "mock (deterministic)",
@@ -10,13 +10,29 @@
   "retrieval": {
     "bm25": {
       "recall_at_5": 0.87,
+      "recall_at_5_ci": {
+        "point": 0.87,
+        "low": 0.8,
+        "high": 0.93,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "mrr": 0.7675,
+      "mrr_ci": {
+        "point": 0.7675,
+        "low": 0.6941,
+        "high": 0.84,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "hits": 87,
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 0.74,
-        "p95": 1.12,
+        "p50": 0.77,
+        "p95": 1.09,
         "mean": 0.91
       },
       "by_family": {
@@ -1530,14 +1546,30 @@
     },
     "dense": {
       "recall_at_5": 0.83,
+      "recall_at_5_ci": {
+        "point": 0.83,
+        "low": 0.76,
+        "high": 0.9,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "mrr": 0.7328,
+      "mrr_ci": {
+        "point": 0.7328,
+        "low": 0.6568,
+        "high": 0.8117,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "hits": 83,
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 1.36,
-        "p95": 1.67,
-        "mean": 2.07
+        "p50": 1.44,
+        "p95": 2.01,
+        "mean": 2.19
       },
       "by_family": {
         "identifier": 1.0,
@@ -3065,14 +3097,30 @@
     },
     "hybrid": {
       "recall_at_5": 0.87,
+      "recall_at_5_ci": {
+        "point": 0.87,
+        "low": 0.8098,
+        "high": 0.93,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "mrr": 0.7715,
+      "mrr_ci": {
+        "point": 0.7715,
+        "low": 0.6993,
+        "high": 0.8428,
+        "n": 100,
+        "resamples": 2000,
+        "paired": false
+      },
       "hits": 87,
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 1.91,
-        "p95": 2.46,
-        "mean": 1.93
+        "p50": 2.06,
+        "p95": 2.77,
+        "mean": 2.13
       },
       "by_family": {
         "identifier": 1.0,
@@ -4601,7 +4649,7 @@
     "summary": {
       "corpus_documents": 412,
       "corpus_chunks": 796,
-      "ingest_ms": 1432.51,
+      "ingest_ms": 1427.29,
       "embedder": "hash-feature-v1",
       "queries": 100,
       "queries_by_family": {
@@ -4616,6 +4664,35 @@
       "queries_any_single_found": 89,
       "queries_hybrid_found_neither": 2,
       "queries_hybrid_lost_from_singles": 4,
+      "best_single": "bm25",
+      "hybrid_vs_bm25": {
+        "point": 0.0,
+        "low": -0.05,
+        "high": 0.05,
+        "n": 100,
+        "resamples": 2000,
+        "paired": true
+      },
+      "hybrid_vs_dense": {
+        "point": 0.04,
+        "low": 0.0,
+        "high": 0.09,
+        "n": 100,
+        "resamples": 2000,
+        "paired": true
+      },
+      "hybrid_vs_best_single": {
+        "point": 0.0,
+        "low": -0.05,
+        "high": 0.05,
+        "n": 100,
+        "resamples": 2000,
+        "paired": true
+      },
+      "bootstrap": {
+        "resamples": 2000,
+        "seed": 7
+      },
       "union_recall_at_5": 0.89,
       "fusion_gap": 4
     }
@@ -4625,33 +4702,33 @@
     "turns": 8,
     "client_ttft_ms": {
       "count": 8,
-      "p50": 124.18,
-      "p95": 129.9,
-      "mean": 125.24
+      "p50": 124.44,
+      "p95": 130.8,
+      "mean": 125.43
     },
     "server_ttft_ms": {
       "count": 8,
-      "p50": 123.25,
-      "p95": 128.8,
-      "mean": 124.17
+      "p50": 123.5,
+      "p95": 129.59,
+      "mean": 124.36
     },
     "gateway_overhead_ms": {
       "count": 8,
-      "p50": 1.03,
-      "p95": 1.37,
+      "p50": 0.99,
+      "p95": 1.4,
       "mean": 1.07
     },
     "frames_per_turn": {
       "count": 8,
       "p50": 17.0,
       "p95": 18.0,
-      "mean": 16.88
+      "mean": 17.0
     },
     "deltas_per_turn": {
       "count": 8,
       "p50": 14.0,
       "p95": 15.0,
-      "mean": 13.88
+      "mean": 14.0
     }
   },
   "coalescing": {

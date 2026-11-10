@@ -23,8 +23,12 @@ dev = [
     "ruff>=0.7.0",
     "websockets>=13.0",
 ]
-# Only needed for `bench/run_bench.py --embedder local`. Kept out of dev so CI
-# and the test suite never download a model.
+# Only needed for the local semantic embedder (`CUEPILOT_EMBEDDING_PROVIDER=local`)
+# and for `bench/run_bench.py --embedder local`. Kept out of dev so CI and the
+# default test suite never download a model.
+local = [
+    "model2vec>=0.7.0",
+]
 bench = [
     "model2vec>=0.7.0",
 ]
@@ -40,6 +44,9 @@ packages = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "local: needs the optional `local` extra (model2vec) and downloads a model",
+]
 
 [tool.ruff]
 line-length = 100

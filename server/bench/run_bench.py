@@ -50,6 +50,13 @@ from app.ws.outbound import OutboundStream  # noqa: E402
 from bench.corpus import benchmark_documents  # noqa: E402
 from bench.embedders import DEFAULT_LOCAL_MODEL, build_bench_embedder  # noqa: E402
 from bench.qrels import QUERIES, by_family, families  # noqa: E402
+from bench.stats import (  # noqa: E402
+    DEFAULT_RESAMPLES,
+    Interval,
+    bootstrap_ci,
+    describe_effect,
+    paired_bootstrap_delta,
+)
 
 DOCS_DIR = ROOT.parent / "docs"
 TOP_K = 5
@@ -93,7 +100,13 @@ def latency_block(values: list[float]) -> dict[str, float | int | None]:
 
 
 # ── 1 + 2: retrieval quality and latency ───────────────────────────────────
-async def evaluate_retrieval(settings: Settings, embedder: Embedder) -> dict:
+async def evaluate_retrieval(
+    settings: Settings,
+    embedder: Embedder,
+    *,
+    resamples: int = DEFAULT_RESAMPLES,
+    seed: int = 0,
+) -> dict:
     metrics = Metrics()
     retriever = HybridRetriever(
         settings,
@@ -113,6 +126,7 @@ async def evaluate_retrieval(settings: Settings, embedder: Embedder) -> dict:
         latencies: list[float] = []
         family_stats: dict[str, dict[str, float]] = {}
         per_query: list[dict] = []
+        hit_vector: list[float] = []
         hits_at_k = 0
         reciprocal_ranks: list[float] = []
         for query in QUERIES:
@@ -126,6 +140,7 @@ async def evaluate_retrieval(settings: Settings, embedder: Embedder) -> dict:
             )
             hit = rank is not None
             hits_at_k += int(hit)
+            hit_vector.append(1.0 if hit else 0.0)
             reciprocal_ranks.append(1.0 / rank if rank else 0.0)
             family = family_stats.setdefault(query.family, {"n": 0, "hits": 0})
             family["n"] += 1
@@ -142,7 +157,13 @@ async def evaluate_retrieval(settings: Settings, embedder: Embedder) -> dict:
         n = len(QUERIES)
         report[mode] = {
             "recall_at_5": round(hits_at_k / n, 4),
+            "recall_at_5_ci": bootstrap_ci(
+                hit_vector, resamples=resamples, seed=seed
+            ).to_dict(),
             "mrr": round(statistics.fmean(reciprocal_ranks), 4),
+            "mrr_ci": bootstrap_ci(
+                reciprocal_ranks, resamples=resamples, seed=seed
+            ).to_dict(),
             "hits": hits_at_k,
             "n": n,
             "latency_ms": latency_block(latencies),
@@ -200,6 +221,18 @@ async def evaluate_retrieval(settings: Settings, embedder: Embedder) -> dict:
         ),
     }
     summary = report["summary"]
+    bm25_hits = [1.0 if q["rank"] else 0.0 for q in bm25["per_query"]]
+    dense_hits = [1.0 if q["rank"] else 0.0 for q in dense["per_query"]]
+    hybrid_hits = [1.0 if q["rank"] else 0.0 for q in hybrid["per_query"]]
+    summary["best_single"] = "bm25" if bm25["recall_at_5"] >= dense["recall_at_5"] else "dense"
+    summary["hybrid_vs_bm25"] = paired_bootstrap_delta(
+        bm25_hits, hybrid_hits, resamples=resamples, seed=seed
+    ).to_dict()
+    summary["hybrid_vs_dense"] = paired_bootstrap_delta(
+        dense_hits, hybrid_hits, resamples=resamples, seed=seed
+    ).to_dict()
+    summary["hybrid_vs_best_single"] = summary[f"hybrid_vs_{summary['best_single']}"]
+    summary["bootstrap"] = {"resamples": resamples, "seed": seed}
     summary["union_recall_at_5"] = round(summary["queries_any_single_found"] / len(QUERIES), 4)
     summary["fusion_gap"] = summary["queries_hybrid_lost_from_singles"]
     return report
@@ -408,11 +441,18 @@ def render_markdown(report: dict) -> str:
         family_cells = "".join(
             f"| {block['by_family'][family]:.1%} " for family in family_names
         )
+        ci = block.get("recall_at_5_ci") or {}
+        recall = f"{block['recall_at_5']:.1%}"
+        if ci:
+            recall += f" [{ci['low']:.1%}, {ci['high']:.1%}]"
         return (
-            f"| {name} | {block['recall_at_5']:.1%} | {block['mrr']:.3f} "
+            f"| {name} | {recall} | {block['mrr']:.3f} "
             f"{family_cells}"
             f"| {block['latency_ms']['p50']} ms | {block['latency_ms']['p95']} ms |"
         )
+
+    def effect(block: dict) -> str:
+        return describe_effect(Interval(**block))
 
     family_header = "".join(f"| {family.replace('_', ' ').title()} " for family in family_names)
     family_rule = "|" + "---|" * (3 + len(family_names) + 2)
@@ -453,14 +493,15 @@ def render_markdown(report: dict) -> str:
         "",
         f"## 1. Retrieval quality (recall@5, {summary['queries']} labelled queries)",
         "",
-        f"| Retriever | Recall@5 | MRR {family_header}| p50 | p95 |",
+        f"| Retriever | Recall@5 [95% CI] | MRR {family_header}| p50 | p95 |",
         family_rule,
         row("BM25 only", bm25),
         row("Dense only", dense),
         row("Hybrid (RRF, k=60)", hybrid),
         "",
-        f"- Hybrid vs. best single retriever: **{summary['hybrid_vs_best_single_pp']:+.1f} pp** recall@5",
-        f"- Hybrid vs. dense-only: **{summary['hybrid_vs_dense_pp']:+.1f} pp** recall@5",
+        f"- Hybrid vs. best single retriever (`{summary['best_single']}`): "
+        f"{effect(summary['hybrid_vs_best_single'])}",
+        f"- Hybrid vs. dense-only: {effect(summary['hybrid_vs_dense'])}",
         f"- Queries dense-only missed that hybrid recovered: **{summary['queries_dense_missed_hybrid_found']}**",
         f"- Queries BM25-only missed that hybrid recovered: **{summary['queries_bm25_missed_hybrid_found']}**",
         f"- Union recall (either retriever alone answers): "
@@ -474,6 +515,20 @@ def render_markdown(report: dict) -> str:
         "### Failure analysis",
         "",
         *failure_lines(dense, hybrid, bm25),
+        "",
+        "### Uncertainty",
+        "",
+        f"Percentile bootstrap over the {summary['queries']} labelled queries "
+        f"({summary['bootstrap']['resamples']} resamples, seed {summary['bootstrap']['seed']}).",
+        "Comparisons are paired: the same query is resampled for both retrievers, so query",
+        "difficulty cancels out. One query is 1 pp, which is why these intervals are wide —",
+        "they describe label noise in this set, not fit to a real domain.",
+        "",
+        f"- MRR: BM25 {bm25['mrr']:.3f} "
+        f"[{bm25['mrr_ci']['low']:.3f}, {bm25['mrr_ci']['high']:.3f}], "
+        f"dense {dense['mrr']:.3f} [{dense['mrr_ci']['low']:.3f}, {dense['mrr_ci']['high']:.3f}], "
+        f"hybrid {hybrid['mrr']:.3f} "
+        f"[{hybrid['mrr_ci']['low']:.3f}, {hybrid['mrr_ci']['high']:.3f}]",
         "",
         *(
             [
@@ -555,6 +610,9 @@ def render_markdown(report: dict) -> str:
         "- The evaluation corpus is synthetic and larger than the demo knowledge base. It is",
         "  built to contain hard negatives, so absolute recall is lower than on the demo KB by",
         "  design. Treat it as a regression baseline, not a claim about your domain.",
+        "- Intervals are percentile bootstraps over 100 labels with a fixed seed: reproducible,",
+        "  but not a substitute for a larger domain-specific label set. They quantify sampling",
+        "  noise only.",
         "- TTFT is measured over the in-process ASGI transport to remove loopback noise. Real",
         "  network RTT adds to the client-observed number.",
         "- Hosted-provider TTFT depends on the provider and model, not on this gateway. The",
@@ -588,6 +646,18 @@ def main() -> int:
         default=DEFAULT_LOCAL_MODEL,
         help=f"model2vec model for --embedder local (default: {DEFAULT_LOCAL_MODEL})",
     )
+    parser.add_argument(
+        "--bootstrap",
+        type=int,
+        default=DEFAULT_RESAMPLES,
+        help=f"bootstrap resamples for confidence intervals (default: {DEFAULT_RESAMPLES})",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=7,
+        help="bootstrap RNG seed, so intervals are reproducible (default: 7)",
+    )
     args = parser.parse_args()
 
     settings = bench_settings()
@@ -601,7 +671,9 @@ def main() -> int:
         local_model=args.embedder_model,
     )
     print(f"evaluating retrieval with {embedder.name}...", file=sys.stderr)
-    retrieval = asyncio.run(evaluate_retrieval(settings, embedder))
+    retrieval = asyncio.run(
+        evaluate_retrieval(settings, embedder, resamples=args.bootstrap, seed=args.seed)
+    )
 
     ttft = {"turns": 0}
     if not args.skip_ttft:

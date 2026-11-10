@@ -10,7 +10,9 @@ services:
       - "5433:5432"
     volumes:
       - cuepilot-pgdata:/var/lib/postgresql/data
-      - ./deploy/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      # The schema is owned by server/app/migrations and applied by the gateway
+      # (and by `make migrate`) under an advisory lock. Nothing is mounted into
+      # docker-entrypoint-initdb.d, so a fresh volume is migrated, not seeded.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cuepilot -d cuepilot"]
       interval: 3s

@@ -50,6 +50,64 @@ jobs:
         working-directory: server
         run: .venv/bin/python -m pytest -q
 
+  migrations:
+    name: server · migrations (postgres)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cuepilot
+          POSTGRES_PASSWORD: cuepilot
+          POSTGRES_DB: cuepilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cuepilot -d cuepilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      CUEPILOT_TEST_DATABASE_URL: postgresql://cuepilot:cuepilot@127.0.0.1:5432/cuepilot
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (locked)
+        working-directory: server
+        run: uv sync --frozen --extra dev --python 3.12
+
+      # Proves the runner end to end: apply, idempotent re-run, dimension
+      # rebuild through the down file, and two replicas racing on boot.
+      - name: Migration integration tests
+        working-directory: server
+        run: .venv/bin/python -m pytest -q tests/test_migrations.py
+
+  local-embedder:
+    name: server · local embedder
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      # This job exists so the semantic path is not a test double in CI. It
+      # downloads ~30 MB of static embeddings once per run.
+      - name: Sync dependencies (with the local extra)
+        working-directory: server
+        run: uv sync --frozen --extra dev --extra local --python 3.12
+
+      - name: Real semantic retrieval
+        working-directory: server
+        run: .venv/bin/python -m pytest -q -m local
+
   desktop:
     name: desktop · typecheck + build
     runs-on: ubuntu-24.04

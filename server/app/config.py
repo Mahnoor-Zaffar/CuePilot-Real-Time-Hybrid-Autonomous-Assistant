@@ -46,11 +46,16 @@ class Settings(BaseSettings):
     mock_ttft_ms: float = 20.0
 
     # ── embeddings ─────────────────────────────────────────────────────────
-    embedding_provider: Literal["auto", "openai", "hash"] = "auto"
+    # auto: hosted embeddings when an OpenAI key is set, otherwise the hash proxy.
+    # local: model2vec static sentence embeddings, no network at query time.
+    embedding_provider: Literal["auto", "openai", "hash", "local"] = "auto"
     openai_api_key: str | None = None
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_model: str = "text-embedding-3-small"
+    # Requested width for the hosted/hash paths. A local model declares its own
+    # width, which becomes the schema's `VECTOR(n)` (a change triggers a rebuild).
     embedding_dim: int = 1536
+    local_embedding_model: str = "minishlab/potion-base-8M"
     embedding_timeout_s: float = 20.0
 
     # ── infrastructure ─────────────────────────────────────────────────────
@@ -114,7 +119,9 @@ class Settings(BaseSettings):
         return "openrouter" if self.openrouter_api_key else "mock"
 
     @property
-    def embedding_mode(self) -> Literal["openai", "hash"]:
+    def embedding_mode(self) -> Literal["openai", "hash", "local"]:
+        if self.embedding_provider == "local":
+            return "local"
         if self.embedding_provider == "hash":
             return "hash"
         if self.embedding_provider == "openai":
