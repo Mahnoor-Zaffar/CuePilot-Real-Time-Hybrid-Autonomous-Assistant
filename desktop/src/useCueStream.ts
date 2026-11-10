@@ -98,8 +98,11 @@ export interface StreamStats {
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
 
+export type AudioSource = "mic" | "system";
+
 export interface AudioState {
   active: boolean;
+  source: AudioSource | null;
   error: string | null;
   level: number;
   bufferedMs: number;
@@ -130,6 +133,7 @@ const INITIAL_STATS: StreamStats = {
 
 const INITIAL_AUDIO: AudioState = {
   active: false,
+  source: null,
   error: null,
   level: 0,
   bufferedMs: 0,
@@ -191,7 +195,8 @@ function persistSession(sessionId: string | null): void {
   }
 }
 
-interface MicHandles {
+interface AudioHandles {
+  kind: AudioSource;
   ctx: AudioContext;
   stream: MediaStream;
   source: MediaStreamAudioSourceNode;
@@ -225,7 +230,7 @@ export function useCueStream() {
   const clientTtftRef = useRef<Map<string, number>>(new Map());
   const firstDeltaRef = useRef<Set<string>>(new Set());
   const statsRef = useRef<StreamStats>({ ...INITIAL_STATS });
-  const micRef = useRef<MicHandles | null>(null);
+  const captureRef = useRef<AudioHandles | null>(null);
   const audioSeqRef = useRef(0);
 
   // ── stats / delta batching ──────────────────────────────────────────────
@@ -707,9 +712,9 @@ export function useCueStream() {
     );
   }, []);
 
-  const stopMic = useCallback(() => {
-    const handles = micRef.current;
-    micRef.current = null;
+  const detachCapture = useCallback(() => {
+    const handles = captureRef.current;
+    captureRef.current = null;
     if (handles) {
       handles.node.port.onmessage = null;
       handles.source.disconnect();
@@ -718,19 +723,12 @@ export function useCueStream() {
       handles.stream.getTracks().forEach((track) => track.stop());
       void handles.ctx.close().catch(() => undefined);
     }
-    setAudio((prev) => ({ ...prev, active: false, level: 0 }));
+    setAudio((prev) => ({ ...prev, active: false, source: null, level: 0 }));
   }, []);
 
-  const startMic = useCallback(async () => {
-    if (micRef.current) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setAudio((prev) => ({ ...prev, error: "microphone is unavailable in this environment" }));
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+  // One graph for both sources: the only difference is which MediaStream feeds it.
+  const attachStream = useCallback(
+    async (stream: MediaStream, kind: AudioSource) => {
       const AudioCtor = window.AudioContext;
       let ctx: AudioContext;
       try {
@@ -770,20 +768,107 @@ export function useCueStream() {
         }
       };
 
-      micRef.current = { ctx, stream, source, node, sink };
-      setAudio((prev) => ({ ...prev, active: true, error: null }));
+      captureRef.current = { kind, ctx, stream, source, node, sink };
+      setAudio((prev) => ({ ...prev, active: true, source: kind, error: null }));
+    },
+    [sendAudioFrame],
+  );
+
+  const startMic = useCallback(async () => {
+    detachCapture();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setAudio((prev) => ({ ...prev, error: "microphone is unavailable in this environment" }));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      await attachStream(stream, "mic");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setAudio((prev) => ({ ...prev, active: false, error: `mic: ${message}` }));
+      setAudio((prev) => ({ ...prev, active: false, source: null, error: `mic: ${message}` }));
     }
-  }, [sendAudioFrame]);
+  }, [attachStream, detachCapture]);
+
+  const startSystemAudio = useCallback(async () => {
+    detachCapture();
+
+    // The main process owns the capture source; ask it whether loopback is
+    // actually available before prompting the user for screen access.
+    const bridge = window.cue;
+    if (bridge?.getAudioCapabilities) {
+      try {
+        const caps = await bridge.getAudioCapabilities();
+        if (!caps.systemAudio) {
+          setAudio((prev) => ({
+            ...prev,
+            active: false,
+            source: null,
+            error: caps.reason ?? "system audio capture is unavailable",
+          }));
+          return;
+        }
+        if (caps.screenPermission === "denied" || caps.screenPermission === "restricted") {
+          setAudio((prev) => ({
+            ...prev,
+            active: false,
+            source: null,
+            error: caps.reason ?? "screen recording permission is denied",
+          }));
+          return;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setAudio((prev) => ({ ...prev, active: false, source: null, error: `system: ${message}` }));
+        return;
+      }
+    }
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setAudio((prev) => ({ ...prev, error: "system audio is unavailable in this environment" }));
+      return;
+    }
+    try {
+      // getDisplayMedia requires a video request even though we only keep audio.
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false },
+      });
+      stream.getVideoTracks().forEach((track) => {
+        track.stop();
+        stream.removeTrack(track);
+      });
+      if (stream.getAudioTracks().length === 0) {
+        stream.getTracks().forEach((track) => track.stop());
+        setAudio((prev) => ({
+          ...prev,
+          active: false,
+          source: null,
+          error:
+            "no system-audio track was returned. Grant Screen Recording and System Audio " +
+            "Recording permission, then retry.",
+        }));
+        return;
+      }
+      await attachStream(stream, "system");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAudio((prev) => ({ ...prev, active: false, source: null, error: `system: ${message}` }));
+    }
+  }, [attachStream, detachCapture]);
 
   const toggleMic = useCallback(() => {
-    if (micRef.current) stopMic();
+    if (captureRef.current?.kind === "mic") detachCapture();
     else void startMic();
-  }, [startMic, stopMic]);
+  }, [detachCapture, startMic]);
 
-  useEffect(() => () => stopMic(), [stopMic]);
+  const toggleSystemAudio = useCallback(() => {
+    if (captureRef.current?.kind === "system") detachCapture();
+    else void startSystemAudio();
+  }, [detachCapture, startSystemAudio]);
+
+  useEffect(() => () => detachCapture(), [detachCapture]);
 
   const activeTurnId = messages.find((message) => message.streaming)?.id ?? null;
 
@@ -803,6 +888,7 @@ export function useCueStream() {
     abort,
     resetSession,
     toggleMic,
+    toggleSystemAudio,
     clearError: () => setLastError(null),
   };
 }

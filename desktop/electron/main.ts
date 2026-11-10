@@ -1,15 +1,37 @@
 /**
  * Electron main process.
  *
- * Owns everything the renderer must not: global hotkeys, clipboard access and
- * (in a fuller build) audio capture. The renderer is sandboxed and talks to this
- * process only through the narrow preload bridge.
+ * Owns everything the renderer must not: global hotkeys, clipboard access, and
+ * the display-media handler that supplies system-audio loopback. The renderer is
+ * sandboxed and talks to this process only through the narrow preload bridge.
  */
-import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  desktopCapturer,
+  globalShortcut,
+  ipcMain,
+  session,
+  shell,
+  systemPreferences,
+} from "electron";
 import path from "node:path";
+
+import { describeAudioCapabilities } from "./audio";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? "http://localhost:5173";
+
+// System-audio loopback on macOS is behind Chromium feature flags until
+// Electron 39. Without them `audio: "loopback"` hands back a track that ends
+// immediately, which is worse than no feature: it looks like it worked.
+if (process.platform === "darwin") {
+  const extra = ["MacLoopbackAudioForScreenShare", "MacSckSystemAudioLoopbackOverride"];
+  const existing = app.commandLine.getSwitchValue("enable-features");
+  const merged = [...new Set([...existing.split(","), ...extra])].filter(Boolean).join(",");
+  app.commandLine.appendSwitch("enable-features", merged);
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -87,8 +109,43 @@ function registerHotkey(): void {
   }
 }
 
+/**
+ * Serve `getDisplayMedia({ audio: true, video: true })` from the renderer with
+ * system-audio loopback instead of a picker.
+ *
+ * The renderer only ever needs the audio track; it stops the video track as soon
+ * as the stream resolves. Requests from anywhere but our top-level frame are
+ * denied, so a navigated or injected page cannot silently start a capture.
+ */
+function registerSystemAudio(): void {
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    const owner = mainWindow?.webContents.mainFrame;
+    const trustedOrigin = isDev ? new URL(DEV_URL).origin : "file://";
+    const fromOurFrame = !request.frame || request.frame === owner;
+    if (!fromOurFrame || request.securityOrigin !== trustedOrigin) {
+      callback({});
+      return;
+    }
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: { width: 0, height: 0 },
+      });
+      const screen = sources[0];
+      if (!screen) {
+        callback({});
+        return;
+      }
+      callback(request.audioRequested ? { video: screen, audio: "loopback" } : { video: screen });
+    } catch {
+      callback({});
+    }
+  });
+}
+
 app.whenReady().then(() => {
   applyCsp();
+  registerSystemAudio();
   createWindow();
   registerHotkey();
 
@@ -113,16 +170,14 @@ ipcMain.handle("cue:get-context", () => ({
   electron: process.versions.electron,
 }));
 
-ipcMain.handle("cue:capture-audio", async () => {
-  // Stub: a real build calls systemPreferences.getMediaAccessStatus / getUserMedia
-  // in the renderer and pipes PCM frames over the socket.
-  return {
-    ok: false,
-    reason: "audio capture is stubbed in the portfolio build",
-    sampleRate: 16000,
-    channels: 1,
-  };
-});
+ipcMain.handle("cue:audio-capabilities", async () =>
+  describeAudioCapabilities(
+    process.platform,
+    process.platform === "darwin"
+      ? systemPreferences.getMediaAccessStatus("screen")
+      : "granted",
+  ),
+);
 
 ipcMain.handle("cue:open-external", async (_event, url: unknown) => {
   if (typeof url !== "string" || !url.startsWith("https://")) return { ok: false };

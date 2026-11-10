@@ -250,19 +250,29 @@ Session ids are opaque `uuid4().hex`.
 
 ## Audio path
 
-1. Renderer calls `getUserMedia` (mono, echo cancellation, noise suppression) and creates
-   an `AudioContext` at 16 kHz when the platform allows it.
-2. An inline AudioWorklet module (`pcm-tap`) posts Float32 blocks to the main thread.
-3. The hook clamps and converts to Int16, accumulates until 100 ms of samples, base64
+Both sources share one capture graph; only the `MediaStream` differs.
+
+1. **Microphone.** `getUserMedia` (mono, echo cancellation, noise suppression).
+2. **System audio.** The renderer calls `getDisplayMedia({video: true, audio: true})` and
+   stops the video track immediately. The main process answers with
+   `setDisplayMediaRequestHandler` instead of a picker: it accepts only the top-level
+   frame at the app origin and passes `{video: screen, audio: "loopback"}`.
+3. Either stream feeds `AudioContext` at 16 kHz when the platform allows it. An inline
+   AudioWorklet module (`pcm-tap`) posts Float32 blocks to the main thread.
+4. The hook clamps and converts to Int16, accumulates until 100 ms of samples, base64
    encodes, and sends `{type:"audio", seq, pcm, sample_rate}`.
-4. The server appends to a bounded `AudioBuffer` (3 s), returns `audio_ack` with buffered
+5. The server appends to a bounded `AudioBuffer` (3 s), returns `audio_ack` with buffered
    duration and RMS (used by the level meter), and — when an OpenAI key is configured —
    starts a rolling-window Whisper transcription. Transcripts arrive as `transcript`
    frames. Transcription is best effort and never blocks the receive loop.
-5. A zero-gain `GainNode` keeps the graph alive without echoing the mic to speakers.
+6. A zero-gain `GainNode` keeps the graph alive without echoing the mic to speakers.
 
-The Electron main process exposes `cue:capture-audio` as a stub; system-audio capture is
-deliberately out of scope for the portfolio build, while mic capture in the renderer is real.
+Loopback is native on Windows and on Electron 39+. This build pins Electron 33, so
+`main.ts` appends `MacLoopbackAudioForScreenShare` and `MacSckSystemAudioLoopbackOverride`
+to `enable-features` before `app.whenReady()`. Without them macOS returns a track that ends
+immediately — a silent failure, which is why the capability IPC reports the permission
+state and a reason the renderer can display. Linux is not claimed: it depends on the sound
+server (PulseAudio/PipeWire), and the IPC says so instead of pretending.
 
 ## Provider layer
 

@@ -469,6 +469,7 @@ export default function App() {
     abort,
     resetSession,
     toggleMic,
+    toggleSystemAudio,
     clearError,
   } = useCueStream();
 
@@ -729,13 +730,23 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className={`chip-toggle mic${audio.active ? " on" : ""}`}
+                    className={`chip-toggle mic${audio.source === "mic" ? " on" : ""}`}
                     onClick={toggleMic}
                     title={audio.error ?? "Stream raw PCM from the microphone"}
-                    aria-pressed={audio.active}
+                    aria-pressed={audio.source === "mic"}
                   >
                     <span className="mic-dot" style={{ opacity: 0.35 + Math.min(1, audio.level * 12) }} />
                     mic
+                  </button>
+                  <button
+                    type="button"
+                    className={`chip-toggle mic${audio.source === "system" ? " on" : ""}`}
+                    onClick={toggleSystemAudio}
+                    title="Stream system audio (what the call or video is playing) as raw PCM"
+                    aria-pressed={audio.source === "system"}
+                  >
+                    <span className="mic-dot" style={{ opacity: 0.35 + Math.min(1, audio.level * 12) }} />
+                    system
                   </button>
                   {audio.active ? (
                     <span className="level-meter" aria-hidden>

@@ -15,6 +15,15 @@ interface CueHotkeyPayload {
   capturedAt: number;
 }
 
+interface CueAudioCapabilities {
+  systemAudio: boolean;
+  platform: string;
+  screenPermission: string;
+  sampleRate: number;
+  channels: number;
+  reason?: string;
+}
+
 interface CueBridge {
   getContext(): Promise<{
     platform: string;
@@ -23,7 +32,7 @@ interface CueBridge {
     selection: string;
     electron: string;
   }>;
-  captureAudio(): Promise<{ ok: boolean; reason?: string; sampleRate: number; channels: number }>;
+  getAudioCapabilities(): Promise<CueAudioCapabilities>;
   openExternal(url: string): Promise<{ ok: boolean }>;
   platform: string;
   onHotkey(callback: (payload: CueHotkeyPayload) => void): () => void;

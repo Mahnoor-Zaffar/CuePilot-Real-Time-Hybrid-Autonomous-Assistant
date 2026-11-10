@@ -352,7 +352,8 @@ Python 3.11 and 3.12 against the locked `uv.lock`, a migration job against a rea
 `pgvector` service (apply, idempotent re-run, dimension rebuild, two replicas racing, a
 journal round-trip and a transcript surviving an embedding-width rebuild),
 a job that installs the `local` extra and exercises the real semantic embedder, the
-renderer typecheck and production build on Node 22, and a docs gate that parses every
+renderer typecheck and production build on Node 22 (plus a smoke check of the system-audio
+capability policy), and a docs gate that parses every
 Mermaid diagram and resolves every relative link. `scripts/check-docs.mjs` uses mermaid's
 own grammar under jsdom, so a broken diagram fails the build instead of shipping as a
 broken image.
@@ -418,8 +419,8 @@ server/
   Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
 desktop/
   src/            React UI + useCueStream (the entire client transport)
-  electron/       main process (hotkeys, clipboard, CSP) + contextBridge preload
-  scripts/        measure-idle.cjs
+  electron/       main process (hotkeys, clipboard, CSP, display-media audio) + preload
+  scripts/        measure-idle.cjs · check-audio.cjs
 docs/             architecture · protocol · failure modes · generated metrics
 scripts/          check-docs.mjs (mermaid + link gate)
 .github/          CI (server matrix · migrations · local embedder · desktop · docs) and release
@@ -474,9 +475,14 @@ rule is a deliberate simplification.
 
 **Not built yet** — the next slices:
 
-- The desktop app is a **client skeleton**: shell, streaming transport, and UI are complete;
-  system-audio capture is stubbed in the main process (microphone capture is real).
-  Packaging and notarization are not wired up.
+- The desktop app is a **client skeleton** by design: one screen, no settings, no onboarding.
+  The shell, streaming transport, microphone capture, and system-audio loopback are real.
+  Packaging ships unsigned DMGs; notarization is not wired up.
+- **System audio is macOS and Windows only.** On macOS it needs Screen Recording
+  permission (System Settings → Privacy & Security → Screen Recording), and this build
+  pins Electron 33, so it relies on two Chromium feature flags to reach the loopback path.
+  The capability IPC reports a denied permission with a reason instead of failing silently.
+  Linux depends on the sound server and is not claimed.
 - The benchmark corpus is synthetic. The bootstrap intervals say how much of a difference
   this label set can resolve; they say nothing about your domain. A BEIR subset would add
   an external reference point.

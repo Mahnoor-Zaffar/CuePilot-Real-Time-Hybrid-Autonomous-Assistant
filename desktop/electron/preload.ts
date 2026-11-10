@@ -17,10 +17,19 @@ export interface HotkeyPayload {
   capturedAt: number;
 }
 
+export interface AudioCapabilities {
+  systemAudio: boolean;
+  platform: string;
+  screenPermission: string;
+  sampleRate: number;
+  channels: number;
+  reason?: string;
+}
+
 const api = {
   getContext: (): Promise<CueContext> => ipcRenderer.invoke("cue:get-context"),
-  captureAudio: (): Promise<{ ok: boolean; reason?: string; sampleRate: number; channels: number }> =>
-    ipcRenderer.invoke("cue:capture-audio"),
+  getAudioCapabilities: (): Promise<AudioCapabilities> =>
+    ipcRenderer.invoke("cue:audio-capabilities"),
   openExternal: (url: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("cue:open-external", url),
   platform: process.platform,

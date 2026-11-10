@@ -38,6 +38,9 @@ degradation instead of hiding it.
 | Unknown session id | cache miss, then journal miss | new session (no replay) | client replaces id |
 | Abort mid-stream | client `abort` frame | task cancel, flush text, `aborted` | user continues |
 | Mic denied / no Worklet | browser exception | inline audio error, text still works | grant permission |
+| Screen Recording denied | `getMediaAccessStatus("screen")` | capability IPC returns a reason; no capture starts | grant permission + restart |
+| Loopback unsupported (Linux) | platform check | `systemAudio: false` with a reason | use mic or another OS |
+| Loopback returns no audio track | empty `getAudioTracks()` | stop the stream, show a permission hint | retry after granting |
 | Transcription fails | HTTP exception | log + metric, no transcript | best effort |
 
 ## Reconnect backoff
@@ -334,6 +337,8 @@ applied when the tab is visible again; it is not dropped.
   partial answer; only completed and aborted turns are durable. Journal writes can also be
   dropped under backpressure (`journal.dropped`), which costs a transcript line by design.
 - Metrics are per worker; no aggregation across replicas.
-- The desktop system-audio path is stubbed; only microphone capture is implemented.
+- System audio is macOS and Windows only, and on macOS it needs Screen Recording
+  permission; a denied permission surfaces as a reason in the UI, not as silence. Linux
+  depends on the sound server and is not claimed.
 - The retrieval corpus is synthetic. Intervals quantify sampling noise on this label set,
   not fit to any real domain.

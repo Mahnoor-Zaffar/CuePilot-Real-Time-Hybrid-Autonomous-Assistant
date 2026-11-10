@@ -134,6 +134,10 @@ jobs:
         working-directory: desktop
         run: npm run build
 
+      - name: Audio capability policy
+        working-directory: desktop
+        run: npm run check:audio
+
       - name: Upload renderer bundle
         uses: actions/upload-artifact@v7
         with:
