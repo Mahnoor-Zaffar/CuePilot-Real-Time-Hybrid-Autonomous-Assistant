@@ -13,7 +13,7 @@ from typing import Any
 from app.config import Settings
 from app.infra.bus import EventBus, build_bus
 from app.infra.cache import Cache, build_cache
-from app.infra.db import VectorStore, build_store
+from app.infra.db import PgVectorStore, VectorStore, build_store
 from app.llm.agent import Agent
 from app.llm.base import ChatProvider
 from app.llm.registry import build_provider
@@ -23,6 +23,7 @@ from app.retrieval.embedder import build_embedder
 from app.retrieval.orchestrator import HybridRetriever
 from app.telemetry.metrics import Metrics
 from app.telemetry.otel import TraceRecorder, configure_tracing
+from app.ws.journal import TurnJournal
 from app.ws.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,14 @@ class Runtime:
         provider = build_provider(settings, metrics)
         tools = ToolRegistry(retriever, settings, metrics, recorder)
         agent = Agent(provider, retriever, tools, settings, metrics, recorder)
-        sessions = SessionManager(cache, settings)
+
+        # The journal shares the vector store's pool. With no Postgres there is
+        # nothing durable to write to, so the manager stays mirror-only rather
+        # than pretending otherwise.
+        journal: TurnJournal | None = None
+        if settings.session_journal_enabled and isinstance(store, PgVectorStore):
+            journal = TurnJournal(store.pool, settings, metrics)
+        sessions = SessionManager(cache, settings, journal)
 
         runtime = cls(
             settings=settings,
@@ -185,6 +193,11 @@ class Runtime:
                 "kb_version": self.retriever.kb_version,
                 "seed": self.seed_info,
             },
+            "journal": (
+                self.sessions.journal.stats()
+                if self.sessions.journal is not None
+                else {"backend": "none"}
+            ),
             "transcription_enabled": bool(self.settings.openai_api_key)
             and self.settings.audio_enabled,
             "sessions_active": self.sessions.active_sessions,

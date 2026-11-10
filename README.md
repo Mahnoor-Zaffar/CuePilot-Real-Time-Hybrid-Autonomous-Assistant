@@ -31,7 +31,7 @@ product, not as edge cases.
 | **Generation** | OpenRouter (OpenAI-compatible SSE) with a deterministic offline mock |
 | **Tool loop** | `kb_search`, `kb_open`, `now`, `kb_stats`; validated schemas, bounded iterations |
 | **Backpressure** | Server coalesces to ~16 ms frames and drops frames, never text; client batches per animation frame |
-| **State** | Sessions hot in memory, mirrored to Redis; `kb_version` invalidates retrieval caches |
+| **State** | Sessions hot in memory, mirrored to Redis, journaled to Postgres; `kb_version` invalidates retrieval caches |
 | **Observability** | OTel spans plus an in-process trace ring at `/api/traces/{id}`; latency histograms at `/api/metrics` |
 | **Ships as** | Multi-arch gateway image on GHCR and signed-out macOS DMGs on the releases page |
 | **Runs offline** | No API key, no Docker, no model download required |
@@ -79,7 +79,8 @@ flowchart LR
   Agent --> Provider["Provider<br/>OpenRouter SSE · mock · fallback chain"]
   Provider --> LLM["Hosted model"]
   Dense --> PG[("Postgres<br/>pgvector · HNSW")]
-  Sessions --> Redis[("Redis<br/>cache · pub/sub · sessions")]
+  Sessions --> Redis[("Redis<br/>cache · pub/sub · session mirror")]
+  Sessions --> Journal[("Postgres<br/>sessions · turns journal")]
   Gateway --> Telemetry["OTel spans<br/>metrics · trace ring"]
 ```
 
@@ -99,6 +100,7 @@ sequenceDiagram
   participant A as Agent
   participant R as Retriever
   participant P as Provider
+  participant J as Journal
 
   C->>G: hello {session_id?}
   G-->>C: ready {session_id, kb_version}
@@ -131,6 +133,7 @@ sequenceDiagram
   P-->>A: deltas
   A-->>C: delta (coalesced to ~16 ms)
   A-->>C: done {ttft_ms, total_ms, usage}
+  G-)J: enqueue turn (write-behind, never blocks the stream)
 ```
 
 Ordering is a transport guarantee, not a merge algorithm:
@@ -314,21 +317,28 @@ Every setting is `CUEPILOT_<UPPER_SNAKE>`; the full reference is [`.env.example`
 | `CUEPILOT_LOCAL_EMBEDDING_MODEL` | `minishlab/potion-base-8M` | Static model for the `local` provider |
 | `CUEPILOT_DATABASE_URL` | `…@127.0.0.1:5433/cuepilot` | pgvector store; migrated on boot |
 | `CUEPILOT_REDIS_URL` | `redis://127.0.0.1:6380/0` | Cache, pub/sub, session mirror |
+| `CUEPILOT_SESSION_JOURNAL_ENABLED` | `true` | Write sessions and turns through to Postgres |
+| `CUEPILOT_SESSION_JOURNAL_QUEUE` | `256` | Bounded write-behind queue; full means dropped writes, never a stalled stream |
+| `CUEPILOT_SESSION_JOURNAL_DRAIN_S` | `3.0` | Graceful-shutdown drain budget for the journal worker |
 | `CUEPILOT_ALLOW_DEGRADED_INFRA` | `true` | Fall back instead of failing startup |
 | `CUEPILOT_OTEL_EXPORTER` | `none` | `none` \| `console` \| `otlp` |
 
 The schema is owned by `server/app/migrations/` and applied on boot under a Postgres
-advisory lock, so replicas can start together. A parameter change — today, the embedding
-width — is a rebuild: the runner applies the matching `.down.sql`, re-runs the file, and
-bumps `kb_meta.version` so cached results keyed on the old vectors are dropped. Run it as
-its own step with `make migrate`. Editing an already-applied file fails startup by design.
+advisory lock, so replicas can start together. Each file records only the parameters it
+declares, so a parameter change — today, the embedding width — rebuilds just the file that
+owns it: the runner applies the matching `.down.sql`, re-runs the file, and bumps
+`kb_meta.version` so cached results keyed on the old vectors are dropped. A migration that
+alters objects from an earlier one declares that with a `-- requires: 001` header, and a
+rebuild cascades only through that declared graph. The journal (`002`) declares neither, so
+an embedding-width rebuild leaves the turn history intact. Run it as its own step with
+`make migrate`. Editing an already-applied file fails startup by design.
 
 ---
 
 ## Quality gates
 
 ```bash
-make check        # ruff + tsc (renderer and electron) + 107 tests + docs gate
+make check        # ruff + tsc (renderer and electron) + 123 tests + docs gate
 make test-local   # real semantic embedder tests (needs: cd server && uv sync --extra local)
 make migrate      # apply SQL migrations without booting the gateway
 make bench        # regenerate docs/metrics.json and docs/METRICS.md
@@ -339,7 +349,8 @@ make metrics      # measure-idle, then bench
 `make check` runs the same steps as CI. The workflow in
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) fans them out: the server suite on
 Python 3.11 and 3.12 against the locked `uv.lock`, a migration job against a real
-`pgvector` service (apply, idempotent re-run, dimension rebuild, two replicas racing),
+`pgvector` service (apply, idempotent re-run, dimension rebuild, two replicas racing, a
+journal round-trip and a transcript surviving an embedding-width rebuild),
 a job that installs the `local` extra and exercises the real semantic embedder, the
 renderer typecheck and production build on Node 22, and a docs gate that parses every
 Mermaid diagram and resolves every relative link. `scripts/check-docs.mjs` uses mermaid's
@@ -361,6 +372,7 @@ runs on every invocation and health correctly reports `degraded`.
 | Retrieval | Exact-identifier ranking, fused provenance, cache invalidation on version bump, single-retriever degradation |
 | Agent | Tool loop, history append, rate-limit error frame, no retry after first token, cancellation |
 | WebSocket | Handshake, abort, reconnect + history replay, unknown session, bad frame, audio ack, auth |
+| Journal | Queue drops under pressure, write retry/failure counters, cache-miss recovery, Postgres round-trip, orphan turn insert |
 | API | Health, search, ingest + invalidation, metrics/traces after a turn |
 
 ---
@@ -377,7 +389,9 @@ Handled explicitly, with detection and recovery documented per case:
 | Provider dies after first token | No retry; terminal error, partial answer preserved |
 | Tool timeout / bad args | Error result fed to the model; turn continues |
 | One retriever down | Fuse the survivor; `degraded` surfaced in frame and UI |
-| Postgres / Redis absent | In-memory store / cache / bus; health reports degraded |
+| Postgres / Redis absent | In-memory store / cache / bus; health reports degraded. Sessions stay mirror-only and `journal.backend` is `none` |
+| Journal queue full | Drop the write and count it (`journal.dropped`); the stream never blocks on durability |
+| Postgres lost mid-session | Redis still serves the hot session; resume falls back to a new session only once both are gone |
 | Slow client | Drop delta frames, re-queue text; control frames wait |
 | Silent client | Heartbeat timeout closes `4408`; client reconnects |
 
@@ -391,7 +405,7 @@ Full matrix, including stale-context invalidation and audio failures:
 ```
 server/
   app/
-    ws/           protocol · connection lifecycle · coalescing writer · sessions · audio
+    ws/           protocol · connection lifecycle · coalescing writer · sessions · journal · audio
     llm/          provider interface · OpenRouter SSE · mock · fallback chain · agent · tools
     retrieval/    tokenizer · BM25 · embedder (hash/http/local) · chunking · RRF · orchestrator
     infra/        cache · event bus · pgvector / memory store · migration runner
@@ -400,7 +414,7 @@ server/
     api/          health · KB ingest/search/stats · metrics · traces
   bench/          reproducible harness · 100 labelled queries · bootstrap stats
   scripts/        migrate.py (apply schema without booting)
-  tests/          107 tests
+  tests/          123 tests
   Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
 desktop/
   src/            React UI + useCueStream (the entire client transport)
@@ -448,10 +462,11 @@ The cap is applied after ranking and before truncation, so relevance order is un
 
 Move lexical search into Postgres (`tsvector`/`pg_trgm`) or OpenSearch so replicas stop
 building private BM25 indexes. Replace the O(n) memory fallback with the real ANN path only.
-Write conversations to Postgres and treat Redis as a cache. Aggregate metrics per worker
-instead of scraping a single process. Add a reranker and per-client rate limits. Concurrent
-turns per session would need per-turn outbound queues and an explicit merge policy — the
-current single-active-turn rule is a deliberate simplification.
+Partition the turn journal by session and age, and stream it to an analytics sink instead
+of reading it back one session at a time. Aggregate metrics per worker instead of scraping a
+single process. Add a reranker and per-client rate limits. Concurrent turns per session would
+need per-turn outbound queues and an explicit merge policy — the current single-active-turn
+rule is a deliberate simplification.
 
 ---
 
@@ -462,8 +477,6 @@ current single-active-turn rule is a deliberate simplification.
 - The desktop app is a **client skeleton**: shell, streaming transport, and UI are complete;
   system-audio capture is stubbed in the main process (microphone capture is real).
   Packaging and notarization are not wired up.
-- Sessions are mirrored to Redis, not durably stored. Eviction ends resume; the socket still
-  works and starts a new session. A Postgres turn journal is the fix.
 - The benchmark corpus is synthetic. The bootstrap intervals say how much of a difference
   this label set can resolve; they say nothing about your domain. A BEIR subset would add
   an external reference point.

@@ -69,12 +69,43 @@ def test_discover_requires_the_directory() -> None:
         discover(Path("/definitely/not/a/migrations/dir"))
 
 
-def test_the_shipped_migration_is_discoverable() -> None:
+def test_the_shipped_migrations_are_discoverable() -> None:
     migrations = discover()
-    assert migrations
-    assert migrations[0].version == "001"
-    assert migrations[0].down_path is not None
-    assert "{{embedding_dim}}" in migrations[0].template
+    assert [m.version for m in migrations] == ["001", "002"]
+    first = migrations[0]
+    assert first.down_path is not None
+    assert "{{embedding_dim}}" in first.template
+    # 002 is the journal: it owns no parameters, so a width change must not
+    # rebuild it and delete the transcript.
+    journal = migrations[1]
+    assert journal.parameters == set()
+    assert journal.requires == ()
+    assert journal.down_path is not None
+
+
+def test_discover_parses_requires_headers(tmp_path: Path) -> None:
+    write(tmp_path / "001_a.sql", "SELECT 1;")
+    write(tmp_path / "002_b.sql", "-- requires: 001\nALTER TABLE t ADD x INT;")
+    write(tmp_path / "003_c.sql", "-- requires: 001, 002\nSELECT 3;")
+
+    migrations = discover(tmp_path)
+
+    assert migrations[0].requires == ()
+    assert migrations[1].requires == ("001",)
+    assert migrations[2].requires == ("001", "002")
+
+
+def test_discover_rejects_a_requirement_on_a_missing_migration(tmp_path: Path) -> None:
+    write(tmp_path / "002_b.sql", "-- requires: 001\nSELECT 2;")
+    with pytest.raises(MigrationError, match="does not exist"):
+        discover(tmp_path)
+
+
+def test_discover_rejects_a_forward_requirement(tmp_path: Path) -> None:
+    write(tmp_path / "001_a.sql", "-- requires: 002\nSELECT 1;")
+    write(tmp_path / "002_b.sql", "SELECT 2;")
+    with pytest.raises(MigrationError, match="earlier one"):
+        discover(tmp_path)
 
 
 # ── rendering ──────────────────────────────────────────────────────────────
@@ -123,6 +154,22 @@ def test_plan_is_a_noop_when_the_schema_is_current(tmp_path: Path) -> None:
     assert plan.up_to_date == ["001"]
 
 
+def test_a_migration_with_no_parameters_ignores_an_unrelated_change(tmp_path: Path) -> None:
+    # Rows written by an older runner recorded the whole settings dict. Only the
+    # keys a file declares may trigger a rebuild, or 002 would be dropped on
+    # every embedding-width change.
+    write(tmp_path / "001_a.sql", "VECTOR({{embedding_dim}})")
+    write(tmp_path / "001_a.down.sql", "DROP TABLE t;")
+    write(tmp_path / "002_b.sql", "CREATE TABLE journal (id TEXT);")
+    write(tmp_path / "002_b.down.sql", "DROP TABLE journal;")
+    migrations = discover(tmp_path)
+    applied = applied_for(migrations, {"embedding_dim": 1536})
+
+    plan = plan_migrations(migrations, applied, {"embedding_dim": 256})
+
+    assert [(a.kind, a.migration.version) for a in plan.actions] == [("rebuild", "001")]
+
+
 def test_plan_detects_an_edited_migration(tmp_path: Path) -> None:
     write(tmp_path / "001_a.sql", "SELECT 1;")
     migrations = discover(tmp_path)
@@ -154,10 +201,10 @@ def test_plan_refuses_a_parameter_change_without_a_down_file(tmp_path: Path) -> 
         )
 
 
-def test_a_rebuild_cascades_to_later_migrations(tmp_path: Path) -> None:
+def test_a_rebuild_cascades_through_declared_dependencies(tmp_path: Path) -> None:
     write(tmp_path / "001_a.sql", "VECTOR({{embedding_dim}})")
     write(tmp_path / "001_a.down.sql", "DROP TABLE t;")
-    write(tmp_path / "002_b.sql", "ALTER TABLE t ADD COLUMN x INT;")
+    write(tmp_path / "002_b.sql", "-- requires: 001\nALTER TABLE t ADD COLUMN x INT;")
     write(tmp_path / "002_b.down.sql", "ALTER TABLE t DROP COLUMN x;")
     migrations = discover(tmp_path)
     plan = plan_migrations(
@@ -165,6 +212,17 @@ def test_a_rebuild_cascades_to_later_migrations(tmp_path: Path) -> None:
     )
 
     assert [a.kind for a in plan.actions] == ["rebuild", "rebuild"]
+
+
+def test_a_dependent_without_a_down_file_is_a_hard_error(tmp_path: Path) -> None:
+    write(tmp_path / "001_a.sql", "VECTOR({{embedding_dim}})")
+    write(tmp_path / "001_a.down.sql", "DROP TABLE t;")
+    write(tmp_path / "002_b.sql", "-- requires: 001\nALTER TABLE t ADD COLUMN x INT;")
+    migrations = discover(tmp_path)
+    with pytest.raises(MigrationParamError, match="does not exist"):
+        plan_migrations(
+            migrations, applied_for(migrations, {"embedding_dim": 1536}), {"embedding_dim": 256}
+        )
 
 
 def test_a_new_migration_after_a_rebuild_is_applied(tmp_path: Path) -> None:
@@ -207,6 +265,8 @@ async def _column_type(pool) -> str:
 
 async def _reset(pool) -> None:
     await pool.execute(
+        "DROP TABLE IF EXISTS turns; "
+        "DROP TABLE IF EXISTS sessions; "
         "DROP TABLE IF EXISTS kb_chunks; "
         "DROP TABLE IF EXISTS kb_meta; "
         "DROP TABLE IF EXISTS schema_migrations"
@@ -223,12 +283,20 @@ async def test_migrations_apply_then_rebuild_on_dimension_change() -> None:
         await _reset(pool)
 
         first = await run_migrations(pool, params={"embedding_dim": 1536})
-        assert first.applied == ["001"]
+        assert first.applied == ["001", "002"]
         assert await _column_type(pool) == "vector(1536)"
 
         again = await run_migrations(pool, params={"embedding_dim": 1536})
         assert not again.changed
-        assert again.up_to_date == ["001"]
+        assert again.up_to_date == ["001", "002"]
+
+        # The journal is the only copy of a transcript, so prove a width change
+        # does not rebuild it.
+        await pool.execute(
+            "INSERT INTO sessions (id) VALUES ('s1'); "
+            "INSERT INTO turns (session_id, turn_id, prompt, answer, status) "
+            "VALUES ('s1', 't1', 'why did the socket drop', 'backpressure', 'done')"
+        )
 
         rebuilt = await run_migrations(pool, params={"embedding_dim": 256})
         assert rebuilt.rebuilt == ["001"]
@@ -236,6 +304,9 @@ async def test_migrations_apply_then_rebuild_on_dimension_change() -> None:
         # Derived vectors are gone, and the version bump invalidates caches.
         assert await pool.fetchval("SELECT count(*) FROM kb_chunks") == 0
         assert await pool.fetchval("SELECT version FROM kb_meta WHERE id = 1") == 2
+        # ...but the transcript survived.
+        assert await pool.fetchval("SELECT count(*) FROM turns") == 1
+        assert await pool.fetchval("SELECT count(*) FROM sessions") == 1
     finally:
         await _reset(pool)
         await pool.close()
@@ -274,7 +345,7 @@ async def test_a_table_created_outside_the_runner_is_repaired() -> None:
 
         result = await run_migrations(pool, params={"embedding_dim": 256})
 
-        assert result.applied == ["001"]
+        assert result.applied == ["001", "002"]
         assert result.rebuilt == ["001"]
         assert await _column_type(pool) == "vector(256)"
     finally:
@@ -295,8 +366,8 @@ async def test_concurrent_boots_apply_a_migration_once() -> None:
             run_migrations(pool, params={"embedding_dim": 1536}),
         )
         applied = [version for result in results for version in result.applied]
-        assert applied == ["001"]
-        assert await pool.fetchval("SELECT count(*) FROM schema_migrations") == 1
+        assert applied == ["001", "002"]
+        assert await pool.fetchval("SELECT count(*) FROM schema_migrations") == 2
     finally:
         await _reset(pool)
         await pool.close()

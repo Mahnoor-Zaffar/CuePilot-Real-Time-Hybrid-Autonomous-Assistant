@@ -1,4 +1,4 @@
-"""Session state: hot in memory, mirrored to Redis for cross-replica resume."""
+"""Session state: hot in memory, mirrored to Redis, journaled to Postgres."""
 
 from __future__ import annotations
 
@@ -9,12 +9,15 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from app.config import Settings
 from app.infra.cache import Cache, MemoryCache
+
+if TYPE_CHECKING:
+    from app.ws.journal import TurnJournal
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +115,25 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self, cache: Cache, settings: Settings) -> None:
+    """Hot dict -> Redis -> Postgres.
+
+    Redis is the fast path and Postgres is the record. The journal is optional:
+    with no Postgres there is nothing durable to write to, and the manager
+    behaves exactly as before (mirror-only).
+    """
+
+    def __init__(self, cache: Cache, settings: Settings, journal: TurnJournal | None = None) -> None:
         self.cache = cache
         self.settings = settings
+        self.journal = journal
         self._hot: dict[str, Session] = {}
         self._lock = asyncio.Lock()
         self._sweeper: asyncio.Task | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     async def start(self) -> None:
+        if self.journal is not None:
+            await self.journal.start()
         self._sweeper = asyncio.create_task(self._sweep_loop(), name="session-sweeper")
 
     async def stop(self) -> None:
@@ -129,6 +142,8 @@ class SessionManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._sweeper
             self._sweeper = None
+        if self.journal is not None:
+            await self.journal.stop()
 
     @property
     def active_sessions(self) -> int:
@@ -152,16 +167,37 @@ class SessionManager:
             session = self._hot.get(session_id)
         if session is not None:
             return session
-        raw = await self.cache.get(self._key(session_id))
-        if not raw:
+
+        record = await self._load_record(session_id)
+        if record is None:
             return None
         try:
-            session = Session.from_record(json.loads(raw))
-        except (json.JSONDecodeError, KeyError, TypeError):
+            session = Session.from_record(record)
+        except (KeyError, TypeError, ValueError):
+            logger.warning("ignoring unreadable session record for %s", session_id)
             return None
         async with self._lock:
             self._hot[session.id] = session
         return session
+
+    async def _load_record(self, session_id: str) -> dict[str, Any] | None:
+        """Redis first (hot mirror), then the journal (the record)."""
+        raw = await self.cache.get(self._key(session_id))
+        if raw:
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("corrupt session mirror for %s, trying the journal", session_id)
+        if self.journal is None:
+            return None
+        try:
+            record = await self.journal.load_session(session_id)
+        except Exception as exc:  # noqa: BLE001 - a read failure must not kill the socket
+            logger.warning("session journal read failed for %s: %s", session_id, exc)
+            return None
+        if record is not None:
+            logger.info("session %s recovered from the journal", session_id)
+        return record
 
     async def resume_or_create(
         self, session_id: str | None, client: dict[str, Any] | None = None
@@ -175,12 +211,27 @@ class SessionManager:
         return await self.create(client), False
 
     async def save(self, session: Session) -> None:
+        """Write Redis synchronously (fast path), enqueue Postgres (the record)."""
         session.touch()
         await self.cache.set(
             self._key(session.id),
             json.dumps(session.to_record(), separators=(",", ":")),
             self.settings.session_ttl_s,
         )
+        if self.journal is not None:
+            self.journal.save_session(session)
+
+    def record_turn(self, session: Session, **fields: Any) -> bool:
+        """Enqueue one finished turn. Returns False if there is nowhere durable to put it.
+
+        Called from the turn's terminal path, so it must not await: a slow
+        journal may cost a transcript line, never the stream.
+        """
+        if self.journal is None:
+            return False
+        from app.ws.journal import TurnRecord
+
+        return self.journal.record_turn(TurnRecord(session_id=session.id, **fields))
 
     async def drop(self, session_id: str) -> None:
         async with self._lock:

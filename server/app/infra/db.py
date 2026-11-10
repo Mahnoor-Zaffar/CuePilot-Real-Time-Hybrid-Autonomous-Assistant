@@ -135,6 +135,11 @@ class PgVectorStore:
         self._pool = pool
         self.dim = dim
 
+    @property
+    def pool(self) -> asyncpg.Pool:
+        """Shared connection pool. The session journal writes through it."""
+        return self._pool
+
     @staticmethod
     def _literal(vector: list[float]) -> str:
         return "[" + ",".join(f"{v:.6f}" for v in vector) + "]"

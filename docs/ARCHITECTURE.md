@@ -18,8 +18,7 @@ This document explains how cuePilot is put together and why. For the wire format
 5. **Honest degradation.** Fallbacks are reported in `/api/health`, `/api/metrics`, and
    in the UI.
 
-Non-goals: multi-tenant authz, durable conversation storage, model fine-tuning,
-packaging/notarization.
+Non-goals: multi-tenant authz, model fine-tuning, packaging/notarization.
 
 ## Component map
 
@@ -36,7 +35,7 @@ packaging/notarization.
 │  Connection (ws/connection.py)                                                        │
 │    ├── handshake + auth + heartbeat + close codes                                     │
 │    ├── OutboundStream (ws/outbound.py): per-turn buffers, 16 ms flush, bounded queue  │
-│    └── SessionManager (ws/session.py): hot dict + Redis mirror, sweeper               │
+│    └── SessionManager (ws/session.py): hot dict + Redis mirror + Postgres journal     │
 │                                                                                       │
 │  Agent (llm/agent.py)                                                                 │
 │    retrieval → prompt assembly → provider stream → tool loop → done                   │
@@ -80,7 +79,8 @@ not necessarily the order work completes.
    appends tool messages, and loops (max `max_tool_iterations`, 4).
 9. **Agent** emits `done` with `ttft_ms`, `total_ms`, `finish_reason`, usage, model, and
    tool iterations. The outbound stream flushes buffered text before any control frame.
-10. **Session** persists history to Redis (last 64 entries; replay sends the last 20).
+10. **Session** mirrors history to Redis (last 64 entries; replay sends the last 20) and
+    enqueues the finished turn to the Postgres journal. Neither write is on the token path.
 
 Cancellation can happen at any point after step 3: `abort` cancels the task, the provider
 generator unwinds and closes the upstream HTTP response, buffered text is flushed, and
@@ -219,15 +219,34 @@ enqueued after the final text frame; the client guarantees it is applied after p
 
 ## Sessions and resume
 
-Sessions live in an in-memory dict and are mirrored to Redis under
-`cuepilot:session:{id}` with `session_ttl_s` (3600 s). The record holds history (capped at
-64), scratchpad, `kb_version`, turn count, and client metadata. A sweeper runs every 60 s
-and evicts hot sessions past TTL with no active turn.
+Three tiers, each with one job:
 
-On connect the client sends its stored session id. If found, the server marks the
-connection `resumed: true` and replays `history` (last 20 messages). If not, it creates a
-new session and returns the new id; the client replaces its stored id. Session ids are
-opaque `uuid4().hex`.
+1. **Hot dict.** An in-memory `Session` is the working copy for an open connection.
+2. **Redis mirror.** `cuepilot:session:{id}` holds history (capped at 64), scratchpad,
+   `kb_version`, turn count, and client metadata, with `session_ttl_s` (3600 s). This is
+   the fast path: a resume is one GET. A sweeper evicts hot sessions past TTL with no
+   active turn.
+3. **Postgres journal.** `sessions` is the header row and `turns` is one row per finished
+   turn (prompt, answer, status, finish reason, timings, tool iterations, usage, model).
+   This is the record.
+
+Writes are **write-behind**. `save()` writes Redis synchronously, so the fast path stays
+coherent, and enqueues the Postgres upsert on a bounded `asyncio.Queue` drained by one
+worker. A turn is enqueued on `done` and on `abort` — the same two terminal points where
+the socket emits its final frame. The stream never awaits durability: if Postgres stalls,
+the queue fills and writes are dropped with a counter (`journal.dropped` in `/api/health`),
+which costs a transcript line rather than the turn.
+
+Reads go hot dict → Redis → Postgres → new session. A Redis miss is a cache miss, not data
+loss: the journal rebuilds the header plus the most recent `turn_history_limit` turns, and
+the connection replays history exactly as it would after a Redis hit. With no Postgres the
+journal is absent (`journal.backend = "none"`) and the manager is mirror-only, which the
+health endpoint reports instead of hiding.
+
+On connect the client sends its stored session id. If found anywhere in that chain, the
+server marks the connection `resumed: true` and replays `history` (last 20 messages). If
+not, it creates a new session and returns the new id; the client replaces its stored id.
+Session ids are opaque `uuid4().hex`.
 
 ## Audio path
 
@@ -332,8 +351,10 @@ OTel disabled-by-export.
   chunks, wrong for millions; it exists to keep the demo and tests hermetic.
 - **Per-process metrics.** Correct but not aggregated. Add an OTel metrics exporter or a
   Prometheus endpoint per worker.
-- **Redis for sessions.** Resume is fast but not durable. A production system would write
-  conversation state to Postgres and treat Redis as a cache.
+- **Write-behind journal.** One worker drains the queue, so a slow Postgres costs
+  transcript lines, never stream latency. At scale the `turns` table needs partitioning by
+  session and age, and the journal should stream to an analytics sink rather than being read
+  back one session at a time.
 - **No cross-encoder rerank.** RRF is cheap and robust; a reranker would improve precision
   on a larger corpus at the cost of a second model call.
 - **Single active turn per session.** Simplifies cancellation and ordering. Concurrent

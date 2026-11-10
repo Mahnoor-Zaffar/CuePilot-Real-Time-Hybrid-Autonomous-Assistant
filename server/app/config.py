@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     turn_history_limit: int = 24
     session_ttl_s: int = 3600
 
+    # ── durable sessions ───────────────────────────────────────────────────
+    # Redis mirrors sessions; the journal is the record. Writes are queued so a
+    # slow Postgres costs transcript lines, never stream latency.
+    session_journal_enabled: bool = True
+    session_journal_queue: int = 256
+    session_journal_timeout_s: float = 5.0
+    session_journal_drain_s: float = 3.0
+
     # ── audio ingest ───────────────────────────────────────────────────────
     audio_enabled: bool = True
     audio_window_ms: int = 3000

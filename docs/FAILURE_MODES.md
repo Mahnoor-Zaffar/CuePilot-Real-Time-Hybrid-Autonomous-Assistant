@@ -21,11 +21,13 @@ degradation instead of hiding it.
 | Unknown/invalid tool | registry lookup / validation | error result to the model | model adapts |
 | One retriever fails | gather exception | fuse the other; `degraded` list | next query |
 | Both retrievers fail | empty ranked set | answer without context, `degraded` | next query |
-| Postgres down at boot | probe timeout | in-memory vector store | automatic |
+| Postgres down at boot | probe timeout | in-memory vector store; sessions mirror-only (`journal.backend = "none"`) | automatic |
 | Schema drift / bad DDL | checksum + DDL error | **startup fails**, no degraded fallback | fix the migration |
-| Embedding width changed | recorded render params | rebuild via `.down.sql`, bump KB version | automatic |
-| Postgres lost mid-run | query exception | dense degrades to BM25 | reconnect |
-| Redis down | probe timeout | in-process cache/bus | automatic |
+| Embedding width changed | recorded render params | rebuild owning migration via `.down.sql`, bump KB version; journal untouched | automatic |
+| Postgres lost mid-run | query exception | dense degrades to BM25; journal writes retry, then count as failed | reconnect |
+| Redis down | probe timeout | in-process cache/bus; resume reads the journal | automatic |
+| Journal queue full | `QueueFull` on enqueue | drop the write, count it (`journal.dropped`); stream never blocks | next turn |
+| Turn journal write fails | exception from the drain worker | retry once, then count (`journal.failed`); worker keeps draining | next turn |
 | KB ingest during session | version bump | new cache key + bus invalidation | next turn |
 | Slow client / full queue | `QueueFull` | drop **frames**, keep text | automatic |
 | Wedged socket | 5 s send timeout | close connection | client reconnects |
@@ -33,7 +35,7 @@ degradation instead of hiding it.
 | Malformed frame | Pydantic validation | `bad_frame`, socket stays open | client fixes |
 | Bad handshake | timeout / wrong frame | `error` + close 4400 | client fixes |
 | Bad token | query param check | `error` + close 4401 | client fixes |
-| Unknown session id | cache miss | new session (no replay) | client replaces id |
+| Unknown session id | cache miss, then journal miss | new session (no replay) | client replaces id |
 | Abort mid-stream | client `abort` frame | task cancel, flush text, `aborted` | user continues |
 | Mic denied / no Worklet | browser exception | inline audio error, text still works | grant permission |
 | Transcription fails | HTTP exception | log + metric, no transcript | best effort |
@@ -200,7 +202,8 @@ the current process. This is reported in `/api/health` as a degraded bus.
 `build_store` probes with a short timeout. On failure (and
 `allow_degraded_infra=true`) it returns `MemoryVectorStore` and a reason string. Startup
 continues, `seed_on_start` ingests the corpus into memory, and health reports
-`"status": "degraded"`. Retrieval quality is unchanged for this corpus; durability is lost.
+`"status": "degraded"`. Retrieval quality is unchanged for this corpus. Durability is lost:
+there is no journal, so `journal.backend` is `"none"` and sessions live only in Redis.
 
 ### Schema migration failure
 
@@ -220,6 +223,13 @@ derived `kb_chunks`, bumps `kb_meta.version` so retrieval cache entries keyed on
 vectors miss), re-runs the file at the new width, and boot re-ingests the corpus. The first
 boot after a switch costs one ingest; nothing durable is lost because `kb_chunks` is derived.
 
+Only the migration that **declares** a parameter rebuilds, and a rebuild cascades only
+through explicit `-- requires:` headers. The journal (`002`) declares neither, so changing
+the embedding width rebuilds `001` and leaves `sessions`/`turns` intact — this is covered by
+a Postgres test. The one hazard the runner cannot see is an undeclared dependency: a file
+that alters an earlier migration's objects without the header will not be re-applied, which
+is why the header is part of review.
+
 ### Postgres lost after startup
 
 `PgVectorStore` queries raise. Dense retrieval is marked degraded and BM25 keeps serving
@@ -227,12 +237,35 @@ boot after a switch costs one ingest; nothing durable is lost because `kb_chunks
 index remains usable. Health only reflects the boot-time probe, so a runtime loss is visible
 through `retrieval_dense_failures` and the `degraded` field on `retrieval` frames.
 
+### Session journal
+
+`SessionManager` writes Redis synchronously and enqueues the Postgres write on a bounded
+queue drained by one worker. That split is the whole design: Redis is the fast path, Postgres
+is the record, and the token path never awaits durability.
+
+- **Queue full.** Enqueue is `put_nowait`; a full queue drops the job and increments
+  `journal.dropped`. The turn still completes and the stream is unaffected. A dropped write
+  costs a transcript line, not a response.
+- **Write fails.** The worker retries once with a short backoff, then increments
+  `journal.failed` and moves on. One bad write never kills the worker.
+- **A turn lands before its session row.** Under backpressure the session upsert can be
+  dropped while the turn write survives. The turn write first does
+  `INSERT INTO sessions (id) VALUES ($1) ON CONFLICT DO NOTHING` so the foreign key never
+  rejects a transcript line.
+- **Graceful shutdown** drains for `session_journal_drain_s` (3 s) before cancelling the
+  worker. A hard kill loses at most the queue — that is the accepted cost of write-behind.
+
+Health exposes `journal: {backend, queued, written, dropped, failed}`. With no Postgres the
+journal is absent (`backend = "none"`) and sessions are mirror-only; resume then depends on
+Redis still holding the key.
+
 ### Redis unavailable
 
 Cache and bus both fall back to in-process implementations. Consequences:
 
 - Retrieval caching still works, per process.
-- Session resume still works **within the same process** (hot dict).
+- Session resume still works: hot dict first, then the Postgres journal. Only with no
+  Postgres either does an evicted session become a new session.
 - Cross-replica `kb.invalidate` and `turn.abort` no longer reach other replicas.
 
 Health and `/api/metrics` report `backends.cache = "memory"` and `backends.bus = "memory"`.
@@ -297,9 +330,10 @@ applied when the tab is visible again; it is not dropped.
 ## Known gaps
 
 - No per-client rate limiting; one client can open many sockets.
-- No durable turn journal, so a mid-turn restart loses the partial answer.
+- The journal is written on `done` and `abort`, so a **hard** crash mid-turn still loses the
+  partial answer; only completed and aborted turns are durable. Journal writes can also be
+  dropped under backpressure (`journal.dropped`), which costs a transcript line by design.
 - Metrics are per worker; no aggregation across replicas.
 - The desktop system-audio path is stubbed; only microphone capture is implemented.
-- Session history is capped and stored in Redis only; eviction silently ends resume.
 - The retrieval corpus is synthetic. Intervals quantify sampling noise on this label set,
   not fit to any real domain.

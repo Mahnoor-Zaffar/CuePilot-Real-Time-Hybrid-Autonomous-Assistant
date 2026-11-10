@@ -82,10 +82,12 @@ jobs:
         run: uv sync --frozen --extra dev --python 3.12
 
       # Proves the runner end to end: apply, idempotent re-run, dimension
-      # rebuild through the down file, and two replicas racing on boot.
-      - name: Migration integration tests
+      # rebuild through the down file, two replicas racing on boot, and the
+      # turn journal surviving that rebuild. Then proves the journal itself:
+      # queue semantics, write failure accounting, and a real Postgres round-trip.
+      - name: Migration and journal integration tests
         working-directory: server
-        run: .venv/bin/python -m pytest -q tests/test_migrations.py
+        run: .venv/bin/python -m pytest -q tests/test_migrations.py tests/test_journal.py
 
   local-embedder:
     name: server · local embedder

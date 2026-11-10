@@ -7,7 +7,7 @@ import contextlib
 import json
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -195,11 +195,18 @@ class Connection:
             temperature=frame.options.temperature,
             max_tokens=frame.options.max_tokens,
         )
+        answer: list[str] = []
+        done: dict[str, Any] = {}
+        status = "error"
         try:
             async for out in self.runtime.agent.run(request, session):
                 if out.get("type") == "delta":
+                    answer.append(out["text"])
                     await self.outbound.push_delta(handle.turn_id, out["text"])
                 else:
+                    if out.get("type") == "done":
+                        done = out
+                        status = "error" if out.get("finish_reason") == "error" else "done"
                     # terminal/control frames must not overtake buffered text
                     await self.outbound.flush_turn(handle.turn_id)
                     await self.outbound.send(out)
@@ -207,6 +214,7 @@ class Connection:
             current = asyncio.current_task()
             if current is not None:
                 current.uncancel()
+            status = "aborted"
             with contextlib.suppress(Exception):
                 await self.outbound.flush_turn(handle.turn_id)
                 await self.outbound.send(protocol.aborted(handle.turn_id, "cancelled"))
@@ -214,6 +222,7 @@ class Connection:
         except Exception as exc:  # noqa: BLE001 - terminal frame for the client
             logger.exception("turn failed")
             self.metrics.incr("turns_failed")
+            status = "error"
             with contextlib.suppress(Exception):
                 await self.outbound.send(
                     protocol.error(
@@ -228,6 +237,21 @@ class Connection:
                 session.active_turn = None
             session.turns += 1
             session.kb_version = self.runtime.retriever.kb_version
+            # The journal write is a queue push, not an await on Postgres: the
+            # turn is already finished, and durability must not delay the next one.
+            self.runtime.sessions.record_turn(
+                session,
+                turn_id=handle.turn_id,
+                prompt=frame.text,
+                answer="".join(answer),
+                status=status,
+                finish_reason=done.get("finish_reason"),
+                ttft_ms=done.get("ttft_ms"),
+                total_ms=done.get("total_ms"),
+                tool_iterations=int(done.get("tool_iterations") or 0),
+                usage=done.get("usage") or {},
+                model=done.get("model"),
+            )
             await self.runtime.sessions.save(session)
 
     async def _abort(self, frame: AbortFrame) -> None:

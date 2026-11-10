@@ -17,6 +17,18 @@ Guarantees:
   rendered values are recorded. When a parameter changes, that migration is
   rebuilt: its `.down.sql` runs, then the file re-applies. A parameter change
   without a down file is a hard error, never a silent no-op.
+* **Only the owning migration rebuilds.** A file records the parameters *it*
+  declares, not the whole settings dict, so `002` (which declares none) is not
+  dragged into a rebuild of `001`.
+* **Dependencies are declared, not guessed.** A file that modifies objects
+  created by an earlier migration says so with a header line:
+
+      -- requires: 001
+
+  A rebuild cascades through that graph, so `002_alter_kb_chunks.sql` is
+  re-applied when `001` rebuilds, while an independent `002_sessions.sql` keeps
+  its rows. Undeclared dependencies are the one thing this cannot detect, which
+  is why the header is part of the review checklist.
 
 The one real parameter today is `embedding_dim`. It has to live in the DDL
 (`VECTOR(n)`), and pgvector cannot cast between widths, so the honest model is
@@ -46,6 +58,7 @@ LOCK_KEY = "cuepilot:migrations"
 
 _NAME = re.compile(r"^(?P<version>\d{3,})[_-](?P<name>[A-Za-z0-9_.-]+)\.sql$")
 _TEMPLATE = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+_REQUIRES = re.compile(r"^\s*--\s*requires:\s*(?P<versions>[0-9][0-9,\s]*)\s*$", re.MULTILINE)
 
 _SCHEMA_MIGRATIONS = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -80,6 +93,7 @@ class Migration:
     checksum: str
     down_path: Path | None = None
     down_template: str | None = None
+    requires: tuple[str, ...] = ()
 
     @property
     def down_name(self) -> str:
@@ -118,6 +132,16 @@ def render(text: str, params: Mapping[str, Any], *, source: str = "<sql>") -> st
     return _TEMPLATE.sub(substitute, text)
 
 
+def parse_requires(template: str) -> tuple[str, ...]:
+    """Read `-- requires: 001, 002` header lines. No header means independent."""
+    versions: list[str] = []
+    for match in _REQUIRES.finditer(template):
+        for part in re.split(r"[,\s]+", match.group("versions").strip()):
+            if part and part not in versions:
+                versions.append(part)
+    return tuple(versions)
+
+
 def discover(directory: Path | None = None) -> list[Migration]:
     """Find up-migrations, sorted by version. `.down.sql` files are paired."""
     directory = directory or MIGRATIONS_DIR
@@ -154,9 +178,23 @@ def discover(directory: Path | None = None) -> list[Migration]:
                 down_template=(
                     down_path.read_text(encoding="utf-8") if down_path.exists() else None
                 ),
+                requires=parse_requires(template),
             )
         )
     migrations.sort(key=lambda m: m.version)
+
+    known = {migration.version for migration in migrations}
+    for migration in migrations:
+        for required in migration.requires:
+            if required not in known:
+                raise MigrationError(
+                    f"{migration.path.name} requires {required}, which does not exist"
+                )
+            if required >= migration.version:
+                raise MigrationError(
+                    f"{migration.path.name} requires {required}, but a migration can only "
+                    "depend on an earlier one"
+                )
     return migrations
 
 
@@ -191,10 +229,15 @@ def plan_migrations(
     applied: Mapping[str, AppliedMigration],
     params: Mapping[str, Any],
 ) -> MigrationPlan:
-    """Decide what to run. Raises on drift, and cascades a rebuild forward."""
+    """Decide what to run. Raises on drift, and cascades a rebuild forward.
+
+    A migration rebuilds when a parameter *it declares* changed, or when a
+    migration it `-- requires:` rebuilds. Everything else is left alone: a
+    width change to `001` must not drop the turn journal created by `002`.
+    """
     plan = MigrationPlan()
     params = dict(params)
-    rebuilding = False
+    rebuilding: set[str] = set()
 
     for migration in migrations:
         row = applied.get(migration.version)
@@ -209,15 +252,30 @@ def plan_migrations(
                 "Add a new migration instead of editing an applied one."
             )
 
-        if rebuilding or row.params != params:
+        declared = {key: params[key] for key in migration.parameters if key in params}
+        changed = {
+            key: (row.params.get(key), value)
+            for key, value in declared.items()
+            if row.params.get(key) != value
+        }
+        # Only declared parameters count: rows written by older runners recorded
+        # the whole settings dict, and that must not force a spurious rebuild.
+        depends_on_rebuild = bool(rebuilding.intersection(migration.requires))
+
+        if changed or depends_on_rebuild:
             if migration.down_path is None:
+                reason = (
+                    f"parameters {changed}"
+                    if changed
+                    else f"a migration it requires rebuilt ({sorted(rebuilding)})"
+                )
                 raise MigrationParamError(
-                    f"migration {migration.version} must be rebuilt for parameters "
-                    f"{params} (was {row.params}) but {migration.down_name} does not exist. "
-                    "Add the down file, or restore the previous parameters."
+                    f"migration {migration.version} must be rebuilt for {reason} but "
+                    f"{migration.down_name} does not exist. Add the down file, or restore "
+                    "the previous parameters."
                 )
             plan.actions.append(Action("rebuild", migration))
-            rebuilding = True  # a rebuild invalidates everything after it too
+            rebuilding.add(migration.version)
         else:
             plan.up_to_date.append(migration.version)
 
@@ -270,6 +328,9 @@ async def _apply(conn: asyncpg.Connection, migration: Migration, params: Mapping
     # No bind parameters, so asyncpg uses the simple protocol and the file may
     # contain several statements (extension, tables, indexes) in one round trip.
     await conn.execute(migration.render_up(params))
+    # Record only what this file declares. Storing the whole settings dict makes
+    # every migration look parameterised, so an unrelated change rebuilds it.
+    recorded = {key: params[key] for key in migration.parameters if key in params}
     await conn.execute(
         """
         INSERT INTO schema_migrations (version, name, checksum, params)
@@ -283,7 +344,7 @@ async def _apply(conn: asyncpg.Connection, migration: Migration, params: Mapping
         migration.version,
         migration.name,
         migration.checksum,
-        json.dumps(dict(params)),
+        json.dumps(recorded),
     )
 
 
@@ -316,7 +377,7 @@ async def _enforce_parameters(
     conn: asyncpg.Connection,
     migrations: list[Migration],
     params: Mapping[str, Any],
-) -> str | None:
+) -> list[str]:
     """Make the live schema match the recorded parameters.
 
     `schema_migrations` records what the runner applied, but a table can predate
@@ -324,16 +385,16 @@ async def _enforce_parameters(
     case the row says `embedding_dim=256` while the column is still `vector(1536)`,
     and the first ingest fails on a width mismatch. So verify the postcondition,
     not just the bookkeeping: rebuild through the migration that owns the
-    parameter. Returns the migration version that was rebuilt, if any.
+    parameter. Returns every version that was rebuilt.
     """
     dim = params.get("embedding_dim")
     if dim is None:
-        return None
+        return []
     actual = await _column_type(conn, "kb_chunks", "embedding")
     if actual is None or actual == f"vector({dim})":
-        return None
+        return []
 
-    for migration in reversed(migrations):
+    for index, migration in enumerate(reversed(migrations)):
         if "embedding_dim" in migration.parameters and migration.down_path is not None:
             logger.warning(
                 "kb_chunks.embedding is %s but embedding_dim=%s; rebuilding through %s",
@@ -341,8 +402,21 @@ async def _enforce_parameters(
                 dim,
                 migration.version,
             )
+            # Cascade exactly like the planner: only declared dependents rebuild.
+            position = len(migrations) - 1 - index
+            cascade = {migration.version}
             await _rebuild(conn, migration, params, params)
-            return migration.version
+            for dependent in migrations[position + 1 :]:
+                if not cascade.intersection(dependent.requires):
+                    continue
+                if dependent.down_path is None:
+                    raise MigrationParamError(
+                        f"{dependent.path.name} depends on {sorted(cascade)} and must be "
+                        f"rebuilt, but {dependent.down_name} does not exist."
+                    )
+                await _rebuild(conn, dependent, params, params)
+                cascade.add(dependent.version)
+            return sorted(cascade)
     raise MigrationParamError(
         f"kb_chunks.embedding is {actual} but embedding_dim={dim}, and no migration "
         "with a down file owns that parameter. Add one."
@@ -387,8 +461,9 @@ async def run_migrations(
                     result.applied.append(migration.version)
 
             repaired = await _enforce_parameters(conn, migrations, params)
-            if repaired and repaired not in result.rebuilt:
-                result.rebuilt.append(repaired)
+            for version in repaired:
+                if version not in result.rebuilt:
+                    result.rebuilt.append(version)
         finally:
             await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", LOCK_KEY)
 
