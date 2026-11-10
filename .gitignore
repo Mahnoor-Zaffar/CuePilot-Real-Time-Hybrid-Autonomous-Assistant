@@ -18,6 +18,6 @@ desktop/release/
 .env
 .env.local
 
-# runtime artefacts
-*.log
+# benchmark data (downloaded, regenerable)
+server/bench/data/
 .DS_Store

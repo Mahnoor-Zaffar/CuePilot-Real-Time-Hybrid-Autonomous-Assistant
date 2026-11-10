@@ -413,7 +413,7 @@ server/
     migrations/   numbered SQL up/down files (schema lives here)
     telemetry/    metrics registry · OTel spans · in-memory trace ring
     api/          health · KB ingest/search/stats · metrics · traces
-  bench/          reproducible harness · 100 labelled queries · bootstrap stats
+  bench/          reproducible harness · 100 labelled queries · bootstrap stats · opt-in BEIR subset
   scripts/        migrate.py (apply schema without booting)
   tests/          123 tests
   Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
@@ -486,8 +486,10 @@ rule is a deliberate simplification.
   The capability IPC reports a denied permission with a reason instead of failing silently.
   Linux depends on the sound server and is not claimed.
 - The benchmark corpus is synthetic. The bootstrap intervals say how much of a difference
-  this label set can resolve; they say nothing about your domain. A BEIR subset would add
-  an external reference point.
+  this label set can resolve; they say nothing about your domain. An external reference
+  point is available via `make beir` (opt-in: downloads a BEIR subset, writes
+  `docs/METRICS.beir.md`); the headline numbers in `docs/METRICS.md` remain the
+  synthetic-corpus ones.
 
 **Test doubles, kept on purpose:**
 

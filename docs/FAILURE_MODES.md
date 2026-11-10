@@ -341,4 +341,5 @@ applied when the tab is visible again; it is not dropped.
   permission; a denied permission surfaces as a reason in the UI, not as silence. Linux
   depends on the sound server and is not claimed.
 - The retrieval corpus is synthetic. Intervals quantify sampling noise on this label set,
-  not fit to any real domain.
+  not fit to any real domain. An opt-in BEIR subset (`make beir`) provides an external
+  reference point; its numbers are not the headline.

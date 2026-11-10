@@ -93,6 +93,9 @@ bench: ## Regenerate docs/metrics.json (retrieval, TTFT, coalescing, bundle, idl
 bench-semantic: ## Retrieval benchmark with a real semantic embedder (needs the bench extra)
 	cd server && .venv/bin/python bench/run_bench.py --write --embedder local --out METRICS.semantic.md
 
+beir: ## Opt-in BEIR subset benchmark (network; writes docs/METRICS.beir.md)
+	cd server && .venv/bin/python bench/beir.py --write
+
 bench-quick: ## Retrieval benchmark, fewer bootstrap resamples (faster, wider intervals)
 	cd server && .venv/bin/python bench/run_bench.py --skip-ttft --bootstrap 400
 
