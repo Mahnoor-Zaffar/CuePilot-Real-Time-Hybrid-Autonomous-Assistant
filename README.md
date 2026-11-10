@@ -33,7 +33,7 @@ product, not as edge cases.
 | **Backpressure** | Server coalesces to ~16 ms frames and drops frames, never text; client batches per animation frame |
 | **State** | Sessions hot in memory, mirrored to Redis, journaled to Postgres; `kb_version` invalidates retrieval caches |
 | **Observability** | OTel spans plus an in-process trace ring at `/api/traces/{id}`; latency histograms at `/api/metrics` |
-| **Ships as** | Multi-arch gateway image on GHCR and signed-out macOS DMGs on the releases page |
+| **Ships as** | Multi-arch gateway image on GHCR and macOS DMGs (unsigned by default; notarized when `CSC_LINK` and Apple credentials are configured) |
 | **Runs offline** | No API key, no Docker, no model download required |
 
 ---
@@ -477,7 +477,9 @@ rule is a deliberate simplification.
 
 - The desktop app is a **client skeleton** by design: one screen, no settings, no onboarding.
   The shell, streaming transport, microphone capture, and system-audio loopback are real.
-  Packaging ships unsigned DMGs; notarization is not wired up.
+  Packaging ships DMGs that are unsigned by default; notarization activates automatically
+  when `CSC_LINK` (or a keychain identity) and Apple credentials are present in the
+  release environment, and stays inert otherwise.
 - **System audio is macOS and Windows only.** On macOS it needs Screen Recording
   permission (System Settings → Privacy & Security → Screen Recording), and this build
   pins Electron 33, so it relies on two Chromium feature flags to reach the loopback path.

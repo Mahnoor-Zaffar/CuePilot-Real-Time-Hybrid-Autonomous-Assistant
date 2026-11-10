@@ -37,7 +37,7 @@
   "build": {
     "appId": "com.cuepilot.desktop",
     "productName": "cuePilot",
-    "copyright": "Copyright © 2026 cuePilot",
+    "copyright": "Copyright \u00a9 2026 cuePilot",
     "directories": {
       "output": "release"
     },
@@ -50,16 +50,20 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         }
       ],
       "category": "public.app-category.productivity",
-      "identity": null,
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "cuePilot streams microphone audio to your local gateway so the assistant can hear you.",
         "NSAudioCaptureUsageDescription": "cuePilot captures system audio so the assistant can hear the call or video you are watching."
-      }
+      },
+      "entitlements": "entitlements/entitlements.mac.plist",
+      "entitlementsInherit": "entitlements/entitlements.mac.plist"
     },
     "dmg": {
       "title": "cuePilot ${version}"

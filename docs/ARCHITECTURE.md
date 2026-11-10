@@ -18,7 +18,7 @@ This document explains how cuePilot is put together and why. For the wire format
 5. **Honest degradation.** Fallbacks are reported in `/api/health`, `/api/metrics`, and
    in the UI.
 
-Non-goals: multi-tenant authz, model fine-tuning, packaging/notarization.
+Non-goals: multi-tenant authz, model fine-tuning.
 
 ## Component map
 
