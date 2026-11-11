@@ -183,6 +183,38 @@ class Connection:
     # ── turns ──────────────────────────────────────────────────────────────
     async def _start_turn(self, frame: PromptFrame) -> None:
         assert self.session is not None
+
+        # Durability backpressure: if terminal turns cannot be queued or spooled,
+        # accepting another turn would guarantee an unrecorded transcript. Refuse
+        # with a retryable code instead; the client can resend when the journal
+        # recovers (the replay loop clears the flag).
+        journal = self.runtime.sessions.journal
+        if journal is not None and getattr(journal, "durability_degraded", False):
+            self.metrics.incr("turns_rejected_journal_unavailable")
+            await self.outbound.send(
+                protocol.error(
+                    "transcript durability is degraded; the journal is recovering",
+                    code="journal_unavailable",
+                    turn_id=frame.id,
+                    retryable=True,
+                    retry_after_ms=max(1000, int(self.settings.session_journal_spool_retry_s * 1000)),
+                )
+            )
+            return
+
+        budget = await self.runtime.budget.check(self.session.id)
+        if not budget.allowed:
+            await self.outbound.send(
+                protocol.error(
+                    budget.message or "session budget exhausted",
+                    code=budget.code or "session_budget",
+                    turn_id=frame.id,
+                    retryable=True,
+                    retry_after_ms=budget.retry_after_ms,
+                )
+            )
+            return
+
         if self.session.active_turn is not None:
             await self._abort_active("superseded")
         handle = TurnHandle(turn_id=frame.id)
@@ -229,11 +261,13 @@ class Connection:
                             # Advance the clock even when the checkpoint is shed:
                             # a full queue should not make us retry every token.
                             last_checkpoint = now
-                            if not self.runtime.sessions.checkpoint_turn(
-                                session,
-                                turn_id=handle.turn_id,
-                                prompt=frame.text,
-                                answer="".join(answer),
+                            if not (
+                                await self.runtime.sessions.checkpoint_turn(
+                                    session,
+                                    turn_id=handle.turn_id,
+                                    prompt=frame.text,
+                                    answer="".join(answer),
+                                )
                             ):
                                 self.metrics.incr("turn_checkpoints_dropped")
                 else:
@@ -273,20 +307,34 @@ class Connection:
             # The turn is no longer in flight; clear the marker so the next
             # resume trusts the mirror instead of re-reading the journal.
             session.pending_turn = None
+            final_answer = "".join(answer)
+            usage = done.get("usage") or {}
+            # Write the final partial before enqueuing the terminal turn. If the
+            # replica dies between the two, recovery still has the whole answer.
+            # The journal deletes this key once the terminal row lands.
+            await self.runtime.sessions.save_inflight(
+                session.id,
+                turn_id=handle.turn_id,
+                prompt=frame.text,
+                answer=final_answer,
+            )
             # The journal write is a queue push, not an await on Postgres: the
             # turn is already finished, and durability must not delay the next one.
-            self.runtime.sessions.record_turn(
+            await self.runtime.sessions.record_turn(
                 session,
                 turn_id=handle.turn_id,
                 prompt=frame.text,
-                answer="".join(answer),
+                answer=final_answer,
                 status=status,
                 finish_reason=done.get("finish_reason"),
                 ttft_ms=done.get("ttft_ms"),
                 total_ms=done.get("total_ms"),
                 tool_iterations=int(done.get("tool_iterations") or 0),
-                usage=done.get("usage") or {},
+                usage=usage,
                 model=done.get("model"),
+            )
+            await self.runtime.budget.record_turn(
+                session.id, int(usage.get("total_tokens") or 0)
             )
             await self.runtime.sessions.save(session)
 

@@ -6,32 +6,34 @@ fine for one process and misleading for two. Every replica now publishes a
 snapshot to the shared cache; this module merges the snapshots without adding a
 Prometheus dependency.
 
-The merge is deliberately honest about what it cannot know:
+Histograms are cumulative bucket counts, so the merge is **additive**:
 
-* **Counters** are summed. A replica restart resets its own counters, so the
-  merged total can move backwards; `instances` says how many processes were
-  visible when the snapshot was taken.
-* **Gauges** are summed. Every gauge we publish today is additive (`ws_active`);
-  a non-additive gauge would need an explicit rule here.
-* **Histograms** merge the most recent `sample_limit` raw observations per
-  worker, then recompute percentiles. `count` is the true sum, but percentiles
-  are approximate when a worker observed more values than it published. The
-  approximation is named in `approximate_histograms`, never hidden.
+* every observation is represented, with no sample cap;
+* a percentile is interpolated inside its bucket, so its resolution is the
+  bucket layout, not the number of samples a worker happened to publish.
+
+Counters are summed. A replica restart resets its own counters, so a merged
+total can move backwards; `instances` says how many processes were visible.
+Gauges are summed because every gauge published today is additive
+(`ws_active`); a non-additive gauge would need an explicit rule here.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from app.telemetry.metrics import percentile
+from app.telemetry.metrics import histogram_quantile
 
 _EMPTY_HISTOGRAM: dict[str, Any] = {
     "count": 0,
+    "sum": 0.0,
     "p50": None,
     "p95": None,
     "p99": None,
     "mean": None,
+    "min": None,
     "max": None,
+    "buckets": {},
 }
 
 
@@ -50,14 +52,10 @@ def merge_snapshots(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         names.update((snapshot.get("histograms") or {}).keys())
 
     histograms: dict[str, dict[str, Any]] = {}
-    approximate: list[str] = []
     for name in sorted(names):
-        merged, is_approximate = _merge_histogram(
+        histograms[name] = _merge_histogram(
             [(snapshot.get("histograms") or {}).get(name) or {} for snapshot in usable]
         )
-        histograms[name] = merged
-        if is_approximate:
-            approximate.append(name)
 
     hits = counters.get("retrieval_cache_hits", 0.0)
     misses = counters.get("retrieval_cache_misses", 0.0)
@@ -72,30 +70,34 @@ def merge_snapshots(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "derived": {
             "retrieval_cache_hit_rate": round(hits / total, 4) if total else None,
         },
-        "approximate_histograms": approximate,
     }
 
 
-def _merge_histogram(items: list[dict[str, Any]]) -> tuple[dict[str, Any], bool]:
+def _merge_histogram(items: list[dict[str, Any]]) -> dict[str, Any]:
     count = sum(int(item.get("count") or 0) for item in items)
-    samples: list[float] = []
-    approximate = False
+    total = sum(float(item.get("sum") or 0.0) for item in items)
+    maximums = [float(item["max"]) for item in items if item.get("max") is not None]
+
+    buckets: dict[str, float] = {}
     for item in items:
-        raw = item.get("samples")
-        if isinstance(raw, list):
-            samples.extend(float(value) for value in raw if isinstance(value, (int, float)))
-        if int(item.get("count") or 0) > len(raw or []):
-            approximate = True
+        for label, value in (item.get("buckets") or {}).items():
+            buckets[label] = buckets.get(label, 0.0) + float(value)
 
-    if not samples:
-        return {**_EMPTY_HISTOGRAM, "count": count}, count > 0
+    if count <= 0:
+        return {**_EMPTY_HISTOGRAM, "count": 0, "sum": 0.0, "buckets": buckets}
 
-    ordered = sorted(samples)
+    maximum = max(maximums) if maximums else None
     return {
         "count": count,
-        "p50": percentile(ordered, 50),
-        "p95": percentile(ordered, 95),
-        "p99": percentile(ordered, 99),
-        "mean": round(sum(ordered) / len(ordered), 2),
-        "max": round(ordered[-1], 2),
-    }, approximate
+        "sum": round(total, 3),
+        "p50": histogram_quantile(buckets, count, 50, maximum),
+        "p95": histogram_quantile(buckets, count, 95, maximum),
+        "p99": histogram_quantile(buckets, count, 99, maximum),
+        "mean": round(total / count, 2),
+        "min": min(
+            (float(item["min"]) for item in items if item.get("min") is not None),
+            default=None,
+        ),
+        "max": maximum,
+        "buckets": buckets,
+    }

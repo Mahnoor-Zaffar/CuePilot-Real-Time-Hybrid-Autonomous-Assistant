@@ -23,10 +23,10 @@ from app.retrieval.corpus import all_documents
 from app.retrieval.embedder import build_embedder
 from app.retrieval.orchestrator import HybridRetriever
 from app.telemetry.aggregate import merge_snapshots
-from app.telemetry.metrics import Metrics
+from app.telemetry.metrics import BUCKETS_MS, Metrics
 from app.telemetry.otel import TraceRecorder, configure_tracing
 from app.ws.journal import TurnJournal
-from app.ws.limits import ClientLimiter
+from app.ws.limits import ClientLimiter, TurnBudget
 from app.ws.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ class Runtime:
     agent: Agent
     sessions: SessionManager
     limiter: ClientLimiter
+    budget: TurnBudget
     instance_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     degraded: list[str] = field(default_factory=list)
     seed_info: dict[str, Any] = field(default_factory=dict)
@@ -85,9 +86,10 @@ class Runtime:
         # than pretending otherwise.
         journal: TurnJournal | None = None
         if settings.session_journal_enabled and isinstance(store, PgVectorStore):
-            journal = TurnJournal(store.pool, settings, metrics)
+            journal = TurnJournal(store.pool, settings, metrics, cache)
         sessions = SessionManager(cache, settings, journal)
         limiter = ClientLimiter(cache, settings, metrics)
+        budget = TurnBudget(cache, settings, metrics)
 
         runtime = cls(
             settings=settings,
@@ -102,6 +104,7 @@ class Runtime:
             agent=agent,
             sessions=sessions,
             limiter=limiter,
+            budget=budget,
             degraded=degraded,
         )
         metrics.gauge("ws_active", 0)
@@ -204,9 +207,7 @@ class Runtime:
 
     async def _publish_metrics(self) -> None:
         try:
-            snapshot = self.metrics.snapshot(
-                include_samples=True, sample_limit=self.settings.metrics_sample_limit
-            )
+            snapshot = self.metrics.snapshot()
             snapshot["instance_id"] = self.instance_id
             snapshot["published_at"] = time.time()
             await self.cache.set(
@@ -220,9 +221,7 @@ class Runtime:
 
     async def aggregated_metrics(self) -> dict[str, Any]:
         """Publish this replica, then merge every live snapshot in the cache."""
-        local = self.metrics.snapshot(
-            include_samples=True, sample_limit=self.settings.metrics_sample_limit
-        )
+        local = self.metrics.snapshot()
         local["instance_id"] = self.instance_id
         local["published_at"] = time.time()
         snapshots: dict[str, dict[str, Any]] = {self.instance_id: local}
@@ -252,17 +251,17 @@ class Runtime:
             self.metrics.incr("metrics_aggregation_failures")
 
         merged = merge_snapshots(list(snapshots.values()))
-        approximate = merged.pop("approximate_histograms", [])
         merged["aggregation"] = {
             "backend": self.cache.backend,
             "instances": len(snapshots),
             "instance_ids": sorted(snapshots),
             "merged": len(snapshots) > 1,
-            "approximate_histograms": approximate,
-            "sample_limit": self.settings.metrics_sample_limit,
+            "quantile_method": "cumulative_buckets",
+            "bucket_bounds_ms": list(BUCKETS_MS),
             "note": (
-                "histogram percentiles merge the most recent samples per instance; "
-                "counters are summed and reset when a replica restarts"
+                "histograms merge cumulative buckets additively, so every observation is "
+                "counted; percentiles are interpolated within their bucket. Counters reset "
+                "when a replica restarts"
             ),
         }
         if error is not None:
@@ -295,6 +294,15 @@ class Runtime:
                 else {"backend": "none"}
             ),
             "limits": self.limiter.stats(),
+            "budget": self.budget.stats(),
+            "durability": (
+                {
+                    "degraded": self.sessions.journal.durability_degraded,
+                    "backend": self.sessions.journal.backend,
+                }
+                if self.sessions.journal is not None
+                else {"degraded": False, "backend": "none"}
+            ),
             "transcription_enabled": bool(self.settings.openai_api_key)
             and self.settings.audio_enabled,
             "sessions_active": self.sessions.active_sessions,

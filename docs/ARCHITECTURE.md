@@ -242,9 +242,19 @@ A turn has two write classes:
   the whole answer so far, so shedding one costs at most one interval of crash protection.
 - **Terminal writes** (`done`, `aborted`, `error`) are the transcript. When the queue is full
   or the write fails after its retry, the record is appended to a bounded local NDJSON spool
-  and replayed in the background (`session_journal_spool_retry_s`, 30 s) and once during
-  graceful shutdown. The spool is capped at `session_journal_spool_max_bytes` (8 MB); when
-  full, the write is counted as lost (`session_journal_spool_full`).
+  (first) and, if that is unavailable or full, to the shared cache as
+  `cuepilot:spool:turn:*` with a TTL of `session_journal_spool_cache_ttl_s`. Both are
+  replayed in the background (`session_journal_spool_retry_s`, 30 s) and once during
+  graceful shutdown. The local spool is capped at `session_journal_spool_max_bytes` (8 MB);
+  when both the local spool and the cache fail, `durability_degraded` is set and new prompts
+  are refused with retryable `journal_unavailable` until a write or replay succeeds. The
+  cache fallback's durability depends on Redis persistence, which is the operator's
+  responsibility.
+
+After a successful terminal write, the in-flight checkpoint key (`cuepilot:inflight:{session_id}`)
+is deleted by the journal. Until then it carries the newest partial text with a
+`checkpointed_at` epoch timestamp, so a crash between the final checkpoint and the terminal
+write still leaves a recoverable partial.
 
 The stream never awaits durability: if Postgres stalls, checkpoints drop
 (`journal.dropped`) and terminal writes spill, which costs a little latency in the worst
@@ -255,9 +265,11 @@ case rather than the turn. `turns.updated_at` is what makes stale recovery possi
 Reads go hot dict → Redis → Postgres → new session. A Redis miss is a cache miss, not data
 loss: the journal rebuilds the header plus the most recent `turn_history_limit` turns, and
 the connection replays history exactly as it would after a Redis hit. Replayed turns that
-were recovered from a checkpoint carry `interrupted: true`. With no Postgres the journal is
-absent (`journal.backend = "none"`) and the manager is mirror-only, which the health
-endpoint reports instead of hiding.
+were recovered from a checkpoint carry `interrupted: true` and a `partial` flag with a
+`checkpointed_at` timestamp. The in-flight key is merged last when present, so the newest
+partial survives even when the journal checkpoint is one interval behind. With no Postgres
+the journal is absent (`journal.backend = "none"`) and the manager is mirror-only, which the
+health endpoint reports instead of hiding.
 
 On connect the client sends its stored session id. If found anywhere in that chain, the
 server marks the connection `resumed: true` and replays `history` (last 20 messages). If
@@ -334,16 +346,20 @@ and derived cache hit rate. Counters of note: `delta_frames_sent`, `delta_tokens
 `delta_frames_dropped`, `control_frames_waited`, `provider_retries`, `provider_fallbacks`,
 `turns_aborted`, `ws_bad_frames`, `ws_stale_closed`, `ws_sessions_resumed`,
 `ws_rejected_rate_limit`, `ws_rejected_connection_cap`, `rate_limit_cache_errors`,
-`turn_checkpoints_dropped`, `session_journal_spooled`, `session_journal_replayed`.
+`turn_checkpoints_dropped`, `session_journal_spooled`, `session_journal_replayed`,
+`session_journal_cache_spooled`, `session_journal_cache_replayed`,
+`session_journal_durability_degraded`, `turns_rejected_turn_budget`,
+`turns_rejected_token_budget`, `turns_rejected_journal_unavailable`.
 
-Each replica publishes a sampled snapshot to `cuepilot:metrics:{instance_id}` every
+Each replica publishes a bucket snapshot to `cuepilot:metrics:{instance_id}` every
 `metrics_publish_interval_s` (10 s) with a TTL of `metrics_publish_ttl_s` (30 s).
-`/api/metrics` merges every live snapshot: counters and additive gauges are summed,
-histogram percentiles are recomputed from at most `metrics_sample_limit` (512) recent
-observations per worker, and any histogram where a worker observed more than it published is
-listed in `aggregation.approximate_histograms`. The `aggregation` block also names the
-instances and whether the response is merged. The merge is pure and unit-tested
-(`telemetry/aggregate.py`); it is a stopgap for a real metrics backend, not a replacement.
+`/api/metrics` merges every live snapshot: counters and additive gauges are summed, and
+histogram buckets are merged additively, so every observation is counted; percentiles are
+interpolated within the fixed bucket layout. The `aggregation` block names the instances,
+whether the response is merged, and the quantile method (`cumulative_buckets`) and bucket
+bounds. `GET /metrics` renders the same merged snapshot in Prometheus text format. The
+merge is pure and unit-tested (`telemetry/aggregate.py`); it is a stopgap for a real
+metrics backend, not a replacement.
 
 ## Data model
 
@@ -384,17 +400,19 @@ OTel disabled-by-export.
   (`tsvector`/`pg_trgm`) or OpenSearch and treat the store as the only index.
 - **Exact search fallback.** `MemoryVectorStore` is O(n) per query. Fine for thousands of
   chunks, wrong for millions; it exists to keep the demo and tests hermetic.
-- **Sampled cross-replica metrics.** Counters and gauges merge exactly; histogram
-  percentiles merge the most recent samples per worker and are flagged when approximate. At
+- **Bucket-resolution cross-replica metrics.** Counters and gauges merge exactly; histogram
+  percentiles are interpolated within fixed buckets, so they are not exact quantiles. At
   scale, push to Prometheus/OTLP and stop merging in-process.
-- **Write-behind journal with a local spool.** One worker drains the queue, so a slow
-  Postgres costs checkpoints and, at worst, spills terminal writes to a capped local file.
-  At scale the `turns` table needs partitioning by session and age, the spool should be a
-  durable queue, and the journal should stream to an analytics sink rather than being read
-  back one session at a time.
-- **Coarse rate limiting.** A fixed-window per-client attempt counter plus a per-replica
-  socket cap. Per-token or per-turn budgets, and identity behind a shared NAT, are open
-  work.
+- **Write-behind journal with a local spool and a cache fallback.** One worker drains the
+  queue, so a slow Postgres costs checkpoints and, at worst, spills terminal writes to a
+  capped local file and then to the shared cache. The cache fallback depends on Redis
+  persistence. At scale the `turns` table needs partitioning by session and age, the spool
+  should be a durable queue, and the journal should stream to an analytics sink rather than
+  being read back one session at a time.
+- **Bounded rate limiting.** Sliding-window counters plus per-replica socket cap, plus
+  per-session turn and token budgets enforced post-hoc (a turn may overshoot by one
+  `max_tokens`). Identity is socket-peer unless the operator names a trusted header or
+  enables `X-Forwarded-For`. At scale, push to a real rate-limit backend.
 - **No cross-encoder rerank.** RRF is cheap and robust; a reranker would improve precision
   on a larger corpus at the cost of a second model call.
 - **Single active turn per session.** Simplifies cancellation and ordering. Concurrent

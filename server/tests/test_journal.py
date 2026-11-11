@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,19 @@ class FakePool:
 def make_journal(**overrides: Any) -> tuple[TurnJournal, FakePool]:
     pool = FakePool()
     journal = TurnJournal(pool, make_settings(**overrides), Metrics())  # type: ignore[arg-type]
+    return journal, pool
+
+
+def make_journal_with_cache(
+    cache: MemoryCache, **overrides: Any
+) -> tuple[TurnJournal, FakePool]:
+    pool = FakePool()
+    journal = TurnJournal(
+        pool,  # type: ignore[arg-type]
+        make_settings(**overrides),
+        Metrics(),
+        cache,
+    )
     return journal, pool
 
 
@@ -200,6 +214,56 @@ async def test_a_failed_terminal_write_is_spooled_for_later(tmp_path: Path) -> N
     assert journal._spool.spooled >= 1
 
 
+async def test_a_terminal_turn_falls_back_to_the_shared_cache() -> None:
+    cache = MemoryCache()
+    # The default test settings disable the local spool path.
+    journal, pool = make_journal_with_cache(cache, session_journal_queue=1)
+
+    assert journal.submit(turn(turn_id="t1")) is True
+    assert await journal.record_terminal(turn(turn_id="t2")) is True
+
+    assert journal.cache_spooled == 1
+    assert journal.stats()["durability"]["cache_spool"]["spooled"] == 1
+    keys = await cache.scan("cuepilot:spool:turn:")
+    assert len(keys) == 1
+
+    written = await journal.replay_spool()
+
+    assert written == 1
+    assert journal.cache_replayed == 1
+    assert await cache.scan("cuepilot:spool:turn:") == []
+    await cache.close()
+
+
+async def test_durability_degrades_when_no_spool_is_available() -> None:
+    # No local spool path and no cache: there is nowhere to put the transcript.
+    journal, _ = make_journal(session_journal_queue=1)
+
+    assert journal.submit(turn(turn_id="t1")) is True
+    assert await journal.record_terminal(turn(turn_id="t2")) is False
+
+    assert journal.durability_degraded is True
+    assert journal.stats()["durability"]["degraded"] is True
+    assert journal.dropped == 1
+
+    # A successful replay clears the backpressure flag.
+    journal._note_durable()
+    assert journal.durability_degraded is False
+
+
+async def test_a_successful_write_clears_durability_degradation() -> None:
+    journal, _ = make_journal()
+    journal._mark_degraded("test")
+    await journal.start()
+    try:
+        journal.record_turn(turn())
+        await journal.stop()
+    finally:
+        await journal.stop()
+
+    assert journal.durability_degraded is False
+
+
 # ── reads ──────────────────────────────────────────────────────────────────
 async def test_load_session_rebuilds_the_transcript() -> None:
     journal, pool = make_journal(turn_history_limit=2)
@@ -245,10 +309,12 @@ async def test_load_session_marks_a_partial_turn_as_interrupted() -> None:
     }
     pool.conn.turns = [
         {
+            "turn_id": "t1",
             "prompt": "explain the retry policy",
             "answer": "The client backs off",
             "status": "streaming",
             "finish_reason": None,
+            "updated_at": _dt(150.0),
         }
     ]
 
@@ -256,11 +322,18 @@ async def test_load_session_marks_a_partial_turn_as_interrupted() -> None:
 
     assert record is not None
     assert record["history"] == [
-        {"role": "user", "content": "explain the retry policy", "interrupted": True},
+        {
+            "role": "user",
+            "content": "explain the retry policy",
+            "interrupted": True,
+        },
         {
             "role": "assistant",
             "content": "The client backs off",
             "interrupted": True,
+            "partial": True,
+            "turn_id": "t1",
+            "checkpointed_at": 150.0,
         },
     ]
 
@@ -280,6 +353,7 @@ def _dt(epoch: float):
 # ── SessionManager integration ─────────────────────────────────────────────
 class FakeJournal:
     backend = "postgres"
+    durability_degraded = False
 
     def __init__(self) -> None:
         self.saved: list[dict[str, Any]] = []
@@ -300,6 +374,10 @@ class FakeJournal:
         return True
 
     def record_turn(self, item: TurnRecord) -> bool:
+        self.turns.append(item)
+        return True
+
+    async def record_terminal(self, item: TurnRecord) -> bool:
         self.turns.append(item)
         return True
 
@@ -394,7 +472,10 @@ async def test_record_turn_without_a_journal_is_a_no_op() -> None:
     manager = SessionManager(MemoryCache(), make_settings())
     session = await manager.create()
 
-    assert manager.record_turn(session, turn_id="t1", prompt="p", answer="a", status="done") is False
+    assert (
+        await manager.record_turn(session, turn_id="t1", prompt="p", answer="a", status="done")
+        is False
+    )
 
 
 async def test_checkpoint_turn_is_marked_streaming() -> None:
@@ -402,10 +483,93 @@ async def test_checkpoint_turn_is_marked_streaming() -> None:
     manager = SessionManager(MemoryCache(), make_settings(), journal)  # type: ignore[arg-type]
     session = await manager.create()
 
-    assert manager.checkpoint_turn(session, turn_id="t1", prompt="p", answer="par") is True
+    assert await manager.checkpoint_turn(session, turn_id="t1", prompt="p", answer="par") is True
 
     assert journal.turns[-1].status == "streaming"
     assert journal.turns[-1].answer == "par"
+
+
+async def test_a_checkpoint_writes_a_timestamped_inflight_key() -> None:
+    cache = MemoryCache()
+    manager = SessionManager(cache, make_settings(), FakeJournal())  # type: ignore[arg-type]
+    session = await manager.create()
+
+    await manager.checkpoint_turn(session, turn_id="t1", prompt="p", answer="par")
+
+    raw = await cache.get(f"cuepilot:inflight:{session.id}")
+    assert raw is not None
+    payload = json.loads(raw)
+    assert payload["turn_id"] == "t1"
+    assert payload["prompt"] == "p"
+    assert payload["answer"] == "par"
+    assert payload["checkpointed_at"] > 0
+    await cache.close()
+
+
+async def test_a_partial_turn_is_merged_on_resume_with_its_timestamp() -> None:
+    cache = MemoryCache()
+    journal = FakeJournal()
+    manager = SessionManager(cache, make_settings(), journal)  # type: ignore[arg-type]
+    session = await manager.create()
+    await cache.set(
+        f"cuepilot:inflight:{session.id}",
+        json.dumps(
+            {
+                "turn_id": "t9",
+                "prompt": "explain retries",
+                "answer": "The client backs",
+                "checkpointed_at": 1234.5,
+            }
+        ),
+        ttl_s=60,
+    )
+    manager._hot.clear()
+
+    recovered = await manager.get(session.id)
+
+    assert recovered is not None
+    assert recovered.pending_turn is None
+    assert recovered.history[-2]["content"] == "explain retries"
+    assert recovered.history[-1]["content"] == "The client backs"
+    assert recovered.history[-1]["partial"] is True
+    assert recovered.history[-1]["checkpointed_at"] == 1234.5
+    await cache.close()
+
+
+async def test_a_stale_inflight_key_does_not_duplicate_a_completed_turn() -> None:
+    cache = MemoryCache()
+    journal = FakeJournal()
+    manager = SessionManager(cache, make_settings(), journal)  # type: ignore[arg-type]
+    session = await manager.create()
+    journal.record = {
+        "id": session.id,
+        "created_at": 1.0,
+        "updated_at": 2.0,
+        "history": [
+            {"role": "user", "content": "explain retries"},
+            {"role": "assistant", "content": "The client backs off"},
+        ],
+        "turns": 1,
+    }
+    await cache.set(
+        f"cuepilot:inflight:{session.id}",
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "prompt": "explain retries",
+                "answer": "The client backs off",
+                "checkpointed_at": 1234.5,
+            }
+        ),
+        ttl_s=60,
+    )
+    manager._hot.clear()
+
+    recovered = await manager.get(session.id)
+
+    assert recovered is not None
+    assert len(recovered.history) == 2
+    await cache.close()
 
 
 async def test_manager_starts_and_stops_the_journal() -> None:
@@ -433,7 +597,7 @@ async def test_journal_round_trips_through_postgres() -> None:
         await journal.start()
         manager = SessionManager(MemoryCache(), make_settings(), journal)
         session = await manager.create(client={"app": "test"})
-        manager.record_turn(
+        await manager.record_turn(
             session,
             turn_id="t1",
             prompt="why do clients reconnect all at once",
@@ -481,7 +645,7 @@ async def test_a_checkpoint_is_replaced_by_the_terminal_turn() -> None:
         await journal.start()
         manager = SessionManager(MemoryCache(), make_settings(), journal)
         session = await manager.create()
-        manager.checkpoint_turn(
+        await manager.checkpoint_turn(
             session, turn_id="t1", prompt="why did the socket drop", answer="backpressure"
         )
         await journal.stop()
@@ -492,7 +656,7 @@ async def test_a_checkpoint_is_replaced_by_the_terminal_turn() -> None:
         assert turns[0]["answer"] == "backpressure"
 
         await journal.start()
-        manager.record_turn(
+        await manager.record_turn(
             session,
             turn_id="t1",
             prompt="why did the socket drop",

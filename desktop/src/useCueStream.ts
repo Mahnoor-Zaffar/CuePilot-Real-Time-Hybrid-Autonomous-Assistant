@@ -82,6 +82,8 @@ export interface ChatMessage {
   aborted?: boolean;
   /** recovered from a streaming checkpoint after a crash; text may be partial */
   interrupted?: boolean;
+  /** when the server wrote the partial checkpoint (epoch ms) */
+  checkpointedAt?: number | null;
   /** wall-clock prompt -> first painted delta, measured in the renderer */
   clientTtftMs?: number;
   /** server-side prompt -> first delta handed to the writer */
@@ -335,6 +337,10 @@ export function useCueStream() {
                   text: String(item.content ?? ""),
                   createdAt: now + index,
                   interrupted: item.interrupted === true,
+                  checkpointedAt:
+                    typeof item.checkpointed_at === "number"
+                      ? item.checkpointed_at * 1000
+                      : null,
                 }))
             : [];
           if (restored.length) setMessages(restored);

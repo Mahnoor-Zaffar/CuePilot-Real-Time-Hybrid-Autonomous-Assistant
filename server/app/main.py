@@ -61,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(kb.router)
     app.include_router(observability.router)
+    app.include_router(observability.prometheus_router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:

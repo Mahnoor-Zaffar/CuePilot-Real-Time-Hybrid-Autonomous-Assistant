@@ -1,15 +1,24 @@
-"""Per-client connection limits.
+"""Per-client connection limits and per-session turn/token budgets.
 
-Two independent limits, because they fail in different ways:
+Three independent limits, because they fail in different ways:
 
-* A **shared attempt counter** in the cache caps how often one client may open a
-  socket in a window. Redis makes the counter cross-replica; the in-process
-  fallback makes it per-replica, which is still useful and is reported by
-  `cache.backend`.
+* A **shared connection counter** in the cache caps how often one client may open
+  a socket. It is a *sliding* window (sorted set / monotonic deque), not a fixed
+  bucket, so there is no window boundary to burst across. Redis makes it
+  cross-replica; the in-process fallback makes it per-replica, which is still
+  useful and is reported by `cache.backend`.
 * A **per-replica connection cap** protects this process's memory and task
   count. `ws_active` is a process gauge, so this cap is intentionally local.
+* A **per-session turn and token budget** bounds how much one conversation may
+  spend. Turns are checked at admission, before the provider is called. Tokens
+  are recorded from the completed turn's usage, so the token budget is post-hoc
+  and a turn may overshoot by at most one `llm_max_tokens`.
 
-The limiter fails **open** if the cache raises: a broken limiter must not take
+Identity defaults to the socket peer. Behind a trusted proxy, either trust the
+left-most `X-Forwarded-For` hop or name a header the proxy rewrites; an
+untrusted header is a spoofable key, not identity.
+
+Every limiter fails **open** if the cache raises: a broken limiter must not take
 the gateway down with it. The failure is counted (`rate_limit_cache_errors`) and
 health still reports the configured limits, so it is visible rather than silent.
 """
@@ -18,7 +27,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -50,12 +58,17 @@ ALLOW = LimitDecision(True)
 
 
 def client_identity(websocket: WebSocket, settings: Settings) -> str:
-    """Stable-ish client key for the shared attempt counter.
+    """Stable-ish client key for the shared connection counter.
 
-    The socket peer is the default. Behind a trusted proxy the left-most
-    `X-Forwarded-For` hop is the client, but it is only read when the operator
-    says the proxy is trusted: an untrusted header is just a spoofable key.
+    Precedence: a trusted identity header, then a trusted proxy hop, then the
+    socket peer. The header is only read when the operator names it, because a
+    header the client can set itself is just a spoofable key.
     """
+    header = settings.rate_limit_identity_header
+    if header:
+        supplied = websocket.headers.get(header.lower())
+        if supplied:
+            return supplied.strip()[:128]
     if settings.rate_limit_trust_forwarded_for:
         forwarded = websocket.headers.get("x-forwarded-for")
         if forwarded:
@@ -104,20 +117,19 @@ class ClientLimiter:
 
         window_s = max(1, self.settings.rate_limit_window_s)
         attempts = max(1, self.settings.rate_limit_connect_attempts)
-        now = time.time()
-        bucket = int(now // window_s)
-        key = f"cuepilot:ratelimit:connect:{identity}:{bucket}"
+        key = f"cuepilot:ratelimit:connect:{identity}"
         try:
-            count = await self.cache.incr(key, ttl_s=window_s * 2)
+            allowed, retry_s = await self.cache.window_hit(
+                key, limit=attempts, window_s=window_s
+            )
         except Exception as exc:  # noqa: BLE001 - fail open, but count it
             self.metrics.incr("rate_limit_cache_errors")
             logger.warning("rate limiter cache failed, allowing connection: %s", exc)
             # Fail open means keep the reservation: the caller still owns the slot.
             return LimitDecision(True, reserved=True)
 
-        if count > attempts:
+        if not allowed:
             self.release_reservation()
-            retry_s = max(0.0, (bucket + 1) * window_s - now)
             self.metrics.incr("ws_rejected_rate_limit")
             return LimitDecision(
                 False,
@@ -131,8 +143,114 @@ class ClientLimiter:
         return {
             "enabled": self.settings.rate_limit_enabled,
             "backend": self.cache.backend,
+            "algorithm": "sliding_window",
             "window_s": self.settings.rate_limit_window_s,
             "connect_attempts": self.settings.rate_limit_connect_attempts,
             "max_connections": self.settings.rate_limit_max_connections,
             "trust_forwarded_for": self.settings.rate_limit_trust_forwarded_for,
+            "identity_header": self.settings.rate_limit_identity_header,
+        }
+
+
+class TurnBudget:
+    """Per-session turn and token budgets over the same sliding window.
+
+    The turn budget is enforced at admission: cheap, and it stops a loop before
+    it reaches the provider. The token budget is enforced post-hoc because a
+    turn's cost is only known after the provider reports usage. The overshoot is
+    therefore bounded by one turn's `max_tokens`, which is stated in the docs
+    rather than papered over.
+    """
+
+    backend = "cache"
+
+    def __init__(self, cache: Cache, settings: Settings, metrics: Metrics) -> None:
+        self.cache = cache
+        self.settings = settings
+        self.metrics = metrics
+
+    @property
+    def enabled(self) -> bool:
+        return self.settings.rate_limit_enabled and (
+            self.settings.rate_limit_session_turns > 0
+            or self.settings.rate_limit_session_tokens > 0
+        )
+
+    @property
+    def window_s(self) -> int:
+        return max(1, self.settings.rate_limit_window_s)
+
+    @staticmethod
+    def _turns_key(session_id: str) -> str:
+        return f"cuepilot:budget:turns:{session_id}"
+
+    @staticmethod
+    def _tokens_key(session_id: str) -> str:
+        return f"cuepilot:budget:tokens:{session_id}"
+
+    async def check(self, session_id: str) -> LimitDecision:
+        if not self.enabled:
+            return ALLOW
+        turns = self.settings.rate_limit_session_turns
+        tokens = self.settings.rate_limit_session_tokens
+        window_s = self.window_s
+        try:
+            if turns > 0:
+                used = await self.cache.window_sum(self._turns_key(session_id), window_s=window_s)
+                if used >= turns:
+                    self.metrics.incr("turns_rejected_turn_budget")
+                    return LimitDecision(
+                        False,
+                        code="session_turn_budget",
+                        message=f"this session used {int(used)} of {turns} turns in {window_s}s",
+                        # An upper bound: the oldest turn ages out somewhere in
+                        # the next window, and `window_sum` does not expose when.
+                        retry_after_ms=window_s * 1000,
+                    )
+            if tokens > 0:
+                used = await self.cache.window_sum(
+                    self._tokens_key(session_id), window_s=window_s
+                )
+                if used >= tokens:
+                    self.metrics.incr("turns_rejected_token_budget")
+                    return LimitDecision(
+                        False,
+                        code="session_token_budget",
+                        message=(
+                            f"this session used {int(used)} of {tokens} tokens in {window_s}s"
+                        ),
+                        retry_after_ms=window_s * 1000,
+                    )
+        except Exception as exc:  # noqa: BLE001 - fail open, but count it
+            self.metrics.incr("rate_limit_cache_errors")
+            logger.warning("turn budget cache failed, allowing turn: %s", exc)
+        return ALLOW
+
+    async def record_turn(self, session_id: str, tokens: int) -> None:
+        """Record a completed turn. Called from the terminal path, never mid-stream."""
+        if not self.enabled:
+            return
+        window_s = self.window_s
+        try:
+            if self.settings.rate_limit_session_turns > 0:
+                await self.cache.window_add(
+                    self._turns_key(session_id), amount=1, window_s=window_s
+                )
+            if tokens > 0 and self.settings.rate_limit_session_tokens > 0:
+                await self.cache.window_add(
+                    self._tokens_key(session_id), amount=float(tokens), window_s=window_s
+                )
+        except Exception as exc:  # noqa: BLE001 - budgets must not break the turn
+            self.metrics.incr("rate_limit_cache_errors")
+            logger.warning("turn budget record failed: %s", exc)
+
+    def stats(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "backend": self.cache.backend,
+            "window_s": self.window_s,
+            "session_turns": self.settings.rate_limit_session_turns,
+            "session_tokens": self.settings.rate_limit_session_tokens,
+            "token_budget": "post_hoc_from_completed_usage",
+            "max_overshoot_tokens": self.settings.llm_max_tokens,
         }

@@ -191,22 +191,124 @@ class SessionManager:
         A mirror with `pending_turn` was written while a turn was streaming, so
         it may be behind the checkpointed journal. In that one case the journal
         is authoritative and is read even though Redis has a hit.
+
+        The in-flight key is merged last: it carries the newest partial text even
+        when the journal checkpoint is one interval behind, and it is timestamped
+        so the client can say how old the partial is.
         """
         raw = await self.cache.get(self._key(session_id))
+        record: dict[str, Any] | None = None
         if raw:
             try:
                 record = json.loads(raw)
             except json.JSONDecodeError:
                 logger.warning("corrupt session mirror for %s, trying the journal", session_id)
                 record = None
-            if isinstance(record, dict):
-                if record.get("pending_turn") and self.journal is not None:
-                    recovered = await self._load_journal(session_id)
-                    if recovered is not None:
-                        logger.info("session %s recovered from the journal (in-flight turn)", session_id)
-                        return recovered
-                return record
-        return await self._load_journal(session_id)
+            if isinstance(record, dict) and record.get("pending_turn") and self.journal is not None:
+                recovered = await self._load_journal(session_id)
+                if recovered is not None:
+                    logger.info(
+                        "session %s recovered from the journal (in-flight turn)", session_id
+                    )
+                    record = recovered
+        if not isinstance(record, dict):
+            record = await self._load_journal(session_id)
+        if record is not None:
+            inflight = await self._load_inflight(session_id)
+            if inflight is not None:
+                record = self._merge_inflight(record, inflight)
+        return record
+
+    async def _load_inflight(self, session_id: str) -> dict[str, Any] | None:
+        try:
+            raw = await self.cache.get(self._inflight_key(session_id))
+        except Exception as exc:  # noqa: BLE001 - recovery is best effort
+            logger.warning("inflight checkpoint read failed for %s: %s", session_id, exc)
+            return None
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _merge_inflight(
+        record: dict[str, Any], inflight: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Append a partial assistant turn unless the journal already has it.
+
+        The journal clears the in-flight key after the terminal write, but a crash
+        between the write and the clear can leave both. A completed turn always
+        ends with an assistant message answering the same prompt, so that is the
+        duplicate check.
+        """
+        prompt = str(inflight.get("prompt") or "")
+        answer = str(inflight.get("answer") or "")
+        if not prompt:
+            return record
+        history = list(record.get("history") or [])
+        last_user = next(
+            (message for message in reversed(history) if message.get("role") == "user"), None
+        )
+        if (
+            history
+            and history[-1].get("role") == "assistant"
+            and last_user is not None
+            and last_user.get("content") == prompt
+        ):
+            return record
+        if answer:
+            history.append(
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "interrupted": True,
+                    "turn_id": inflight.get("turn_id"),
+                }
+            )
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                    "interrupted": True,
+                    "partial": True,
+                    "turn_id": inflight.get("turn_id"),
+                    "checkpointed_at": inflight.get("checkpointed_at"),
+                }
+            )
+        return {**record, "history": history, "pending_turn": None}
+
+    async def save_inflight(
+        self, session_id: str, *, turn_id: str | None = None, **fields: Any
+    ) -> None:
+        """Persist the newest partial answer for crash recovery.
+
+        This is a cache write, not a database write: it is cheap enough to run on
+        the checkpoint cadence and it survives losing the replica that was
+        streaming. It is deleted by the journal after the terminal write lands.
+        """
+        if not turn_id:
+            return
+        payload = {
+            "turn_id": turn_id,
+            "prompt": fields.get("prompt") or "",
+            "answer": fields.get("answer") or "",
+            "checkpointed_at": time.time(),
+        }
+        try:
+            await self.cache.set(
+                self._inflight_key(session_id),
+                json.dumps(payload, separators=(",", ":")),
+                self.settings.session_ttl_s,
+            )
+        except Exception as exc:  # noqa: BLE001 - a missed checkpoint is not fatal
+            logger.warning("inflight checkpoint write failed for %s: %s", session_id, exc)
+
+    async def clear_inflight(self, session_id: str) -> None:
+        with contextlib.suppress(Exception):
+            await self.cache.delete(self._inflight_key(session_id))
 
     async def _load_journal(self, session_id: str) -> dict[str, Any] | None:
         if self.journal is None:
@@ -242,42 +344,50 @@ class SessionManager:
         if self.journal is not None:
             self.journal.save_session(session)
 
-    def record_turn(self, session: Session, **fields: Any) -> bool:
+    async def record_turn(self, session: Session, **fields: Any) -> bool:
         """Enqueue one finished turn. Returns False if there is nowhere durable to put it.
 
-        Called from the turn's terminal path, so it must not await: a slow
-        journal may cost a transcript line, never the stream. Terminal turns
-        spool rather than drop when the journal queue is full.
+        Called from the turn's terminal path, so it must not block on Postgres:
+        a slow journal may cost a transcript line, never the stream. Terminal
+        turns try the local spool, then the shared cache, before they are lost.
         """
         if self.journal is None:
             return False
         from app.ws.journal import TurnRecord
 
-        return self.journal.record_turn(TurnRecord(session_id=session.id, **fields))
+        return await self.journal.record_terminal(TurnRecord(session_id=session.id, **fields))
 
-    def checkpoint_turn(self, session: Session, **fields: Any) -> bool:
+    async def checkpoint_turn(self, session: Session, **fields: Any) -> bool:
         """Best-effort partial-turn checkpoint while tokens are streaming.
 
-        Unlike `record_turn`, this is explicitly droppable: the next checkpoint
-        carries the whole answer so far, so a dropped one costs at most one
-        interval of crash protection, never the stream.
+        Two destinations: the journal (durable, droppable) and the in-flight key
+        (cache, one write per interval, visible to every replica). The next
+        checkpoint carries the whole answer so far, so a dropped journal write
+        costs at most one interval of crash protection, never the stream.
         """
-        if self.journal is None:
-            return False
-        from app.ws.journal import TurnRecord
+        queued = False
+        if self.journal is not None:
+            from app.ws.journal import TurnRecord
 
-        return self.journal.record_turn(
-            TurnRecord(session_id=session.id, status="streaming", **fields)
-        )
+            queued = self.journal.record_turn(
+                TurnRecord(session_id=session.id, status="streaming", **fields)
+            )
+        await self.save_inflight(session.id, **fields)
+        return queued
 
     async def drop(self, session_id: str) -> None:
         async with self._lock:
             self._hot.pop(session_id, None)
         await self.cache.delete(self._key(session_id))
+        await self.clear_inflight(session_id)
 
     @staticmethod
     def _key(session_id: str) -> str:
         return f"cuepilot:session:{session_id}"
+
+    @staticmethod
+    def _inflight_key(session_id: str) -> str:
+        return f"cuepilot:inflight:{session_id}"
 
     # ── housekeeping ───────────────────────────────────────────────────────
     async def _sweep_loop(self) -> None:

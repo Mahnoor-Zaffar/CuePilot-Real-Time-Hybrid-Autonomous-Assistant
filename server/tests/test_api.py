@@ -13,6 +13,10 @@ def test_root_and_health(client: TestClient) -> None:
     assert health["kb"]["chunks"] > 0
     assert health["provider"]["mode"] == "mock"
     assert health["limits"]["enabled"] is True
+    assert health["limits"]["algorithm"] == "sliding_window"
+    assert health["budget"]["enabled"] is True
+    assert health["budget"]["token_budget"] == "post_hoc_from_completed_usage"
+    assert health["durability"]["degraded"] is False
     assert health["journal"]["backend"] == "none"
 
 
@@ -68,7 +72,18 @@ def test_metrics_and_traces_after_a_turn(client: TestClient) -> None:
     assert metrics["backends"]["provider"] == "mock"
     assert metrics["aggregation"]["instances"] == 1
     assert metrics["aggregation"]["merged"] is False
+    assert metrics["aggregation"]["quantile_method"] == "cumulative_buckets"
+    assert metrics["aggregation"]["bucket_bounds_ms"]
     assert "samples" not in metrics["histograms"]["ttft_ms"]
+    assert metrics["histograms"]["ttft_ms"]["buckets"]["+Inf"] >= 1
+
+    # The Prometheus endpoint serialises the same merged snapshot as text.
+    prometheus = client.get("/metrics")
+    assert prometheus.status_code == 200
+    assert prometheus.headers["content-type"].startswith("text/plain")
+    assert "cuepilot_turns_total" in prometheus.text
+    assert 'cuepilot_ttft_ms_bucket{instance=' in prometheus.text
+    assert 'le="+Inf"' in prometheus.text
 
     traces = client.get("/api/traces").json()["traces"]
     assert traces

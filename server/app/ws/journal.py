@@ -34,17 +34,26 @@ import logging
 import os
 import threading
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import asyncpg
 
 from app.config import Settings
 from app.telemetry.metrics import Metrics
 
+if TYPE_CHECKING:
+    from app.infra.cache import Cache
+
 logger = logging.getLogger(__name__)
+
+# Cache-backed spool and in-flight checkpoint keys. Both live beside the session
+# mirror so every replica sees the same fallback and the same partial turn.
+CACHE_SPOOL_PREFIX = "cuepilot:spool:turn:"
+INFLIGHT_PREFIX = "cuepilot:inflight:"
 
 _UPSERT_SESSION = """
 INSERT INTO sessions (id, created_at, updated_at, client, kb_version, turns, scratchpad)
@@ -145,7 +154,10 @@ class JournalSpool:
     The spool is local disk, not a second database. It survives a process crash
     and a Postgres outage; it does not survive losing the container filesystem.
     It is bounded (`session_journal_spool_max_bytes`) so a long outage cannot
-    fill the disk. Both limits are reported in health and the failure docs.
+    fill the disk. When the local spool is full or unwritable, `TurnJournal`
+    falls back to the shared cache (`session_journal_spool_cache_ttl_s`), so a
+    lost container filesystem does not automatically mean a lost transcript.
+    Both limits are reported in health and the failure docs.
     """
 
     def __init__(self, path: str | Path | None, settings: Settings, metrics: Metrics) -> None:
@@ -249,24 +261,34 @@ class TurnJournal:
 
     backend = "postgres"
 
-    def __init__(self, pool: asyncpg.Pool, settings: Settings, metrics: Metrics) -> None:
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        settings: Settings,
+        metrics: Metrics,
+        cache: Cache | None = None,
+    ) -> None:
         self._pool = pool
         self._settings = settings
         self._metrics = metrics
+        self._cache = cache
         self._queue: asyncio.Queue[Job] = asyncio.Queue(maxsize=settings.session_journal_queue)
         self._worker: asyncio.Task | None = None
         self._spool_task: asyncio.Task | None = None
         self._replay_lock = asyncio.Lock()
         self._spool = JournalSpool(settings.session_journal_spool_path or None, settings, metrics)
+        self._durability_degraded = False
         self.written = 0
         self.dropped = 0
         self.failed = 0
+        self.cache_spooled = 0
+        self.cache_replayed = 0
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     async def start(self) -> None:
         if self._worker is None:
             self._worker = asyncio.create_task(self._drain(), name="session-journal")
-        if self._spool.enabled and self._spool_task is None:
+        if (self._spool.enabled or self._cache is not None) and self._spool_task is None:
             self._spool_task = asyncio.create_task(self._spool_loop(), name="journal-spool")
 
     async def stop(self) -> None:
@@ -294,8 +316,18 @@ class TurnJournal:
         self._worker = None
 
     # ── writes ─────────────────────────────────────────────────────────────
+    @property
+    def durability_degraded(self) -> bool:
+        """True when a terminal write could neither be queued nor spooled.
+
+        New prompts are refused with a retryable `journal_unavailable` until a
+        write or replay succeeds. Refusing is more honest than accepting a turn
+        whose transcript is guaranteed to be lost.
+        """
+        return self._durability_degraded
+
     def submit(self, job: Job) -> bool:
-        """Never blocks. Terminal turns spool when the queue is full."""
+        """Never blocks. Terminal turns spool to local disk when the queue is full."""
         try:
             self._queue.put_nowait(job)
             return True
@@ -310,7 +342,64 @@ class TurnJournal:
         return self.submit(_SessionWrite(record=session.to_record()))
 
     def record_turn(self, turn: TurnRecord) -> bool:
+        """Synchronous enqueue, used for droppable checkpoints."""
         return self.submit(turn)
+
+    async def record_terminal(self, turn: TurnRecord) -> bool:
+        """Enqueue a terminal turn, falling back to disk then the shared cache.
+
+        The local spool is tried first because it is cheap and survives a process
+        crash. The cache is the second line: it survives losing the container
+        filesystem, at the cost of depending on the cache's own persistence.
+        """
+        try:
+            self._queue.put_nowait(turn)
+            return True
+        except asyncio.QueueFull:
+            return await self._spool_terminal(turn)
+
+    async def _spool_terminal(self, turn: TurnRecord) -> bool:
+        if await asyncio.to_thread(self._spool.append, turn):
+            return True
+        if await self._cache_append(turn):
+            return True
+        self._mark_degraded("terminal turn could not be spooled to disk or cache")
+        self.dropped += 1
+        self._metrics.incr("session_journal_dropped")
+        return False
+
+    async def _cache_append(self, turn: TurnRecord) -> bool:
+        if self._cache is None:
+            return False
+        key = f"{CACHE_SPOOL_PREFIX}{time.time_ns()}:{uuid.uuid4().hex[:8]}"
+        try:
+            await self._cache.set(
+                key,
+                json.dumps(asdict(turn), separators=(",", ":"), default=str),
+                self._settings.session_journal_spool_cache_ttl_s,
+            )
+        except Exception as exc:  # noqa: BLE001 - cache spool is a fallback
+            self._metrics.incr("session_journal_cache_spool_errors")
+            logger.warning("cache spool append failed: %s", exc)
+            return False
+        self.cache_spooled += 1
+        self._metrics.incr("session_journal_cache_spooled")
+        return True
+
+    async def _clear_inflight(self, session_id: str) -> None:
+        if self._cache is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._cache.delete(f"{INFLIGHT_PREFIX}{session_id}")
+
+    def _mark_degraded(self, reason: str) -> None:
+        if not self._durability_degraded:
+            logger.error("journal durability degraded: %s", reason)
+        self._durability_degraded = True
+        self._metrics.incr("session_journal_durability_degraded")
+
+    def _note_durable(self) -> None:
+        self._durability_degraded = False
 
     async def _drain(self) -> None:
         while True:
@@ -319,19 +408,24 @@ class TurnJournal:
                 await self._write_with_retry(job)
                 self.written += 1
                 self._metrics.incr("session_journal_written")
+                self._note_durable()
+                if isinstance(job, TurnRecord) and job.terminal:
+                    # The journal now holds the terminal turn, so the partial
+                    # checkpoint is no longer needed for recovery.
+                    await self._clear_inflight(job.session_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - the journal must never kill the worker
                 self.failed += 1
                 self._metrics.incr("session_journal_failed")
                 if isinstance(job, TurnRecord) and job.terminal:
-                    if self._spool.append(job):
+                    if await self._spool_terminal(job):
                         logger.warning(
                             "session journal write failed; terminal turn spooled: %s", exc
                         )
                     else:
-                        logger.warning(
-                            "session journal write failed and spool is unavailable: %s", exc
+                        logger.error(
+                            "session journal write failed and no spool is available: %s", exc
                         )
                 else:
                     logger.warning("session journal write failed: %s", exc)
@@ -341,7 +435,11 @@ class TurnJournal:
     async def replay_spool(self) -> int:
         """Try every spooled terminal turn once. Returns how many were written."""
         async with self._replay_lock:
-            return await self._replay_spool_locked()
+            written = await self._replay_spool_locked()
+            written += await self._replay_cache_spool_locked()
+            if written:
+                self._note_durable()
+            return written
 
     async def _replay_spool_locked(self) -> int:
         replay_path = await asyncio.to_thread(self._spool.rotate)
@@ -370,9 +468,52 @@ class TurnJournal:
                 self._spool.replayed += 1
                 self._metrics.incr("session_journal_written")
                 self._metrics.incr("session_journal_replayed")
+                await self._clear_inflight(record.session_id)
         for record in remaining:
             self._spool.append(record)
         await asyncio.to_thread(self._spool.remove, replay_path)
+        return written
+
+    async def _replay_cache_spool_locked(self) -> int:
+        if self._cache is None:
+            return 0
+        try:
+            keys = sorted(await self._cache.scan(CACHE_SPOOL_PREFIX))
+        except Exception as exc:  # noqa: BLE001 - replay is best effort
+            self._metrics.incr("session_journal_cache_spool_errors")
+            logger.warning("cache spool scan failed: %s", exc)
+            return 0
+        written = 0
+        for key in keys:
+            try:
+                raw = await self._cache.get(key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cache spool read failed: %s", exc)
+                continue
+            if not raw:
+                continue
+            try:
+                record = TurnRecord(**json.loads(raw))
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                # A poison record would otherwise be retried forever.
+                self._metrics.incr("session_journal_cache_spool_errors")
+                logger.warning("dropping unreadable cache spool record: %s", exc)
+                await self._cache.delete(key)
+                continue
+            try:
+                await self._write_with_retry(record)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - leave the key for the next pass
+                logger.warning("cache-spooled turn replay failed: %s", exc)
+                continue
+            written += 1
+            self.written += 1
+            self.cache_replayed += 1
+            self._metrics.incr("session_journal_written")
+            self._metrics.incr("session_journal_cache_replayed")
+            await self._cache.delete(key)
+            await self._clear_inflight(record.session_id)
         return written
 
     async def _spool_loop(self) -> None:
@@ -457,7 +598,7 @@ class TurnJournal:
             if row is None:
                 return None
             turns = await conn.fetch(
-                "SELECT prompt, answer, status, finish_reason FROM turns "
+                "SELECT turn_id, prompt, answer, status, finish_reason, updated_at FROM turns "
                 "WHERE session_id = $1 ORDER BY created_at ASC, turn_id ASC",
                 session_id,
             )
@@ -475,6 +616,13 @@ class TurnJournal:
                 }
                 if interrupted:
                     assistant_message["interrupted"] = True
+                    assistant_message["partial"] = True
+                    turn_id = turn.get("turn_id")
+                    if turn_id:
+                        assistant_message["turn_id"] = turn_id
+                    updated_at = turn.get("updated_at")
+                    if updated_at is not None:
+                        assistant_message["checkpointed_at"] = updated_at.timestamp()
                 history.append(assistant_message)
         return {
             "id": row["id"],
@@ -523,6 +671,20 @@ class TurnJournal:
             "dropped": self.dropped,
             "failed": self.failed,
             "spool": self._spool.stats(),
+            "durability": {
+                "degraded": self._durability_degraded,
+                "cache_spool": {
+                    "backend": self._cache.backend if self._cache is not None else None,
+                    "shared": bool(self._cache is not None and self._cache.backend == "redis"),
+                    "spooled": self.cache_spooled,
+                    "replayed": self.cache_replayed,
+                    "ttl_s": self._settings.session_journal_spool_cache_ttl_s,
+                },
+                "note": (
+                    "terminal writes try the local spool first, then the shared cache; "
+                    "cache durability depends on Redis persistence"
+                ),
+            },
         }
 
 

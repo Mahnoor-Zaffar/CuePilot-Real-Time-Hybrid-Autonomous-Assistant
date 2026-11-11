@@ -89,15 +89,25 @@ class Settings(BaseSettings):
     session_ttl_s: int = 3600
 
     # ── client limits ──────────────────────────────────────────────────────
-    # A fixed window keyed by client identity, shared through the cache. The
-    # connection cap is per replica because `ws_active` is a process gauge.
-    # Behind a trusted proxy set rate_limit_trust_forwarded_for to use the
-    # left-most X-Forwarded-For address instead of the socket peer.
+    # Sliding windows keyed by client identity, shared through the cache, so
+    # there is no fixed boundary to burst across. The connection cap is per
+    # replica because `ws_active` is a process gauge.
+    #
+    # Identity defaults to the socket peer. Behind a trusted proxy either set
+    # rate_limit_trust_forwarded_for (left-most X-Forwarded-For hop) or point
+    # rate_limit_identity_header at a header the proxy strips and rewrites.
+    # A header the client can set itself is a spoofable key, not identity.
     rate_limit_enabled: bool = True
     rate_limit_window_s: int = 60
     rate_limit_connect_attempts: int = 30
     rate_limit_max_connections: int = 200
     rate_limit_trust_forwarded_for: bool = False
+    rate_limit_identity_header: str | None = None
+    # Per-session budgets over the same window. Turns are checked at admission;
+    # tokens are recorded after each completed turn, so a turn can overshoot by
+    # at most one `llm_max_tokens`. 0 disables that budget.
+    rate_limit_session_turns: int = 30
+    rate_limit_session_tokens: int = 120_000
 
     # ── durable sessions ───────────────────────────────────────────────────
     # Redis mirrors sessions; the journal is the record. Writes are queued so a
@@ -113,6 +123,10 @@ class Settings(BaseSettings):
     turn_checkpoint_stale_s: float = 60.0
     session_journal_spool_path: str = "data/journal-spool.ndjson"
     session_journal_spool_max_bytes: int = 8_000_000
+    # When local disk is unavailable or full, terminal turns fall back to the
+    # shared cache. Redis persistence (AOF/RDB) is the operator's responsibility;
+    # a cache with no persistence is still better than dropping the transcript.
+    session_journal_spool_cache_ttl_s: int = 3600
     session_journal_spool_retry_s: float = 30.0
 
     # ── audio ingest ───────────────────────────────────────────────────────
@@ -128,12 +142,11 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://127.0.0.1:4318"
     otel_service_name: str = "cuepilot-gateway"
     trace_buffer_turns: int = 200
-    # Each replica publishes a sampled snapshot to the shared cache; /api/metrics
-    # merges every live snapshot. Percentiles are recomputed from the most recent
-    # `metrics_sample_limit` observations per worker, and say so when approximate.
+    # Each replica publishes a bucket snapshot to the shared cache; /api/metrics
+    # merges every live snapshot additively (every observation is counted) and
+    # /metrics renders the same snapshot for Prometheus to scrape.
     metrics_publish_interval_s: float = 10.0
     metrics_publish_ttl_s: int = 30
-    metrics_sample_limit: int = 512
 
     @field_validator("cors_origins", "llm_fallback_models", mode="before")
     @classmethod

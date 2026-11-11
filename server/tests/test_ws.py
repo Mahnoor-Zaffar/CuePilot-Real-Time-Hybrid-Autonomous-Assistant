@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 
+from app.infra.cache import MemoryCache
 from app.main import create_app
 from app.telemetry.metrics import Metrics
-from app.ws.limits import ClientLimiter
+from app.ws.limits import ClientLimiter, TurnBudget, client_identity
 from fastapi.testclient import TestClient
 from tests.conftest import drain_ws, make_settings
 
@@ -157,9 +159,9 @@ async def test_a_concurrent_admit_cannot_overrun_the_cap() -> None:
     class SlowCache:
         backend = "slow"
 
-        async def incr(self, key: str, ttl_s: int | None = None) -> int:
+        async def window_hit(self, key: str, *, limit: int, window_s: float):
             await asyncio.sleep(0.01)
-            return 1
+            return True, 0.0
 
     metrics = Metrics()
     limiter = ClientLimiter(
@@ -184,7 +186,7 @@ async def test_limiter_fails_open_when_the_cache_is_unavailable() -> None:
     class BrokenCache:
         backend = "broken"
 
-        async def incr(self, key: str, ttl_s: int | None = None) -> int:
+        async def window_hit(self, key: str, *, limit: int, window_s: float):
             raise ConnectionError("redis went away")
 
     metrics = Metrics()
@@ -194,6 +196,81 @@ async def test_limiter_fails_open_when_the_cache_is_unavailable() -> None:
 
     assert decision.allowed is True
     assert metrics.counters["rate_limit_cache_errors"] == 1
+
+
+async def test_connection_limit_is_a_sliding_window_not_a_fixed_bucket() -> None:
+    cache = MemoryCache()
+    limiter = ClientLimiter(
+        cache, make_settings(rate_limit_connect_attempts=2, rate_limit_window_s=60), Metrics()
+    )
+
+    assert (await limiter.admit("a")).allowed is True
+    limiter.release_reservation()
+    assert (await limiter.admit("a")).allowed is True
+    limiter.release_reservation()
+    denied = await limiter.admit("a")
+    assert denied.allowed is False
+    assert denied.code == "client_rate_limited"
+    assert denied.retry_after_ms and denied.retry_after_ms > 0
+    await cache.close()
+
+
+def test_identity_header_is_used_only_when_configured() -> None:
+    class FakeSocket:
+        headers = {"x-client-id": "tenant-7", "x-forwarded-for": "203.0.113.9, 10.0.0.1"}
+        client = None
+
+    socket = FakeSocket()  # type: ignore[arg-type]
+    assert client_identity(socket, make_settings()) == "unknown"
+    assert (
+        client_identity(socket, make_settings(rate_limit_identity_header="x-client-id"))
+        == "tenant-7"
+    )
+    assert (
+        client_identity(socket, make_settings(rate_limit_trust_forwarded_for=True))
+        == "203.0.113.9"
+    )
+
+
+async def test_turn_budget_rejects_at_admission_and_records_usage() -> None:
+    cache = MemoryCache()
+    budget = TurnBudget(
+        cache,
+        make_settings(rate_limit_session_turns=2, rate_limit_session_tokens=100),
+        Metrics(),
+    )
+
+    assert (await budget.check("s1")).allowed is True
+    await budget.record_turn("s1", 60)
+    assert (await budget.check("s1")).allowed is True
+    await budget.record_turn("s1", 50)
+
+    turns = await budget.check("s1")
+    assert turns.allowed is False
+    assert turns.code == "session_turn_budget"
+
+    tokens = await budget.check("s2")
+    assert tokens.allowed is True
+    await budget.record_turn("s2", 100)
+    tokens = await budget.check("s2")
+    assert tokens.allowed is False
+    assert tokens.code == "session_token_budget"
+    await cache.close()
+
+
+def test_session_turn_budget_is_enforced_over_the_socket() -> None:
+    app = create_app(make_settings(rate_limit_session_turns=1))
+    with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+        handshake(ws)
+        ws.send_json({"type": "prompt", "id": "t1", "text": "What is CUE-E1042?"})
+        drain_ws(ws, until="done")
+        time.sleep(0.1)  # let the terminal path record the completed turn
+        ws.send_json({"type": "prompt", "id": "t2", "text": "What is CUE-E2041?"})
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert frame["code"] == "session_turn_budget"
+        assert frame["turn_id"] == "t2"
+        assert frame["retryable"] is True
 
 
 def test_websocket_auth_rejects_bad_token() -> None:

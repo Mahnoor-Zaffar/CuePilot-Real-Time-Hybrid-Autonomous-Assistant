@@ -137,14 +137,23 @@ A turn restored from a streaming checkpoint is flagged rather than presented as 
 {
   "type": "history",
   "messages": [
-    { "role": "user", "content": "explain the retry policy", "interrupted": true },
-    { "role": "assistant", "content": "The client backs off", "interrupted": true }
+    { "role": "user", "content": "explain the retry policy", "interrupted": true, "turn_id": "t9" },
+    {
+      "role": "assistant",
+      "content": "The client backs off",
+      "interrupted": true,
+      "partial": true,
+      "turn_id": "t9",
+      "checkpointed_at": 1234.5
+    }
   ]
 }
 ```
 
 `interrupted: true` means the server recovered a partial turn (a crash or a replica that
-stopped checkpointing). The text is the last checkpoint, not necessarily the final answer.
+stopped checkpointing). `partial` is set on the assistant message, and `checkpointed_at` is
+the Unix timestamp (seconds) at which the server last wrote that partial, so the client can
+show how old it is. The text is the last checkpoint, not necessarily the final answer.
 Clients should render it as partial and may offer a resend.
 
 ### `ack`
@@ -298,6 +307,9 @@ Error codes:
 | `unauthorized` | connection | Bad/missing token; socket closes with 4401. | no |
 | `client_rate_limited` | connection | Too many connection opens for this client in the window; socket closes with 4429. | yes |
 | `connection_cap` | connection | This replica is at its concurrent-socket cap; socket closes with 4429. | yes |
+| `session_turn_budget` | turn | This session used its per-window turn budget. | yes |
+| `session_token_budget` | turn | This session used its per-window token budget. | yes |
+| `journal_unavailable` | turn | Transcript durability is degraded; the journal is recovering. | yes |
 | `rate_limited` | turn | Provider 429 after retries/fallback. | yes |
 | `provider_unavailable` | turn | Provider 5xx/transport failure. | yes |
 | `context_overflow` | turn | Prompt exceeded the model window. | no |

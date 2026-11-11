@@ -13,7 +13,7 @@ degradation instead of hiding it.
 |---|---|---|---|
 | Gateway unreachable | socket close/error | jittered reconnect banner | automatic, ≤8 attempts |
 | Server restart mid-turn | close during stream | reconnect + resume + replay; partial turn marked `interrupted` | automatic |
-| Connection flood | shared counter + per-replica gauge | `client_rate_limited` / `connection_cap` + close `4429` | after `retry_after_ms` |
+| Connection flood | sliding-window counter + per-replica gauge | `client_rate_limited` / `connection_cap` + close `4429` | after `retry_after_ms` |
 | Provider 429 | HTTP 429 / SSE error | retry with backoff → model fallback → `rate_limited` | user retries |
 | Provider 5xx / transport | status/exception | same as 429, then `provider_unavailable` | user retries |
 | Provider dies mid-stream | exception after first token | **no retry**, terminal `error` | user retries |
@@ -27,11 +27,11 @@ degradation instead of hiding it.
 | Embedding width changed | recorded render params | rebuild owning migration via `.down.sql`, bump KB version; journal untouched | automatic |
 | Postgres lost mid-run | query exception | dense degrades to BM25; journal writes retry, then count as failed | reconnect |
 | Redis down | probe timeout | in-process cache/bus; resume reads the journal | automatic |
-| Journal queue full | `QueueFull` on enqueue | checkpoints drop (`journal.dropped`); terminal turns spool to disk | replay loop |
+| Journal queue full | `QueueFull` on enqueue | checkpoints drop (`journal.dropped`); terminal turns spool to local disk, then to the shared cache, then reject new prompts (`journal_unavailable`) | replay loop |
 | Turn journal write fails | exception from the drain worker | retry once; terminal turns spool, then replay | replay loop |
-| Hard crash mid-turn | stale `streaming` row on read | partial answer restored, marked `interrupted` | automatic |
-| Spool full / unwritable | `session_journal_spool_full` / `_errors` | terminal write is lost and counted; stream unaffected | operator frees disk |
-| Metrics across replicas | per-instance snapshots in cache | merged counters/gauges; sampled histogram percentiles | next publish |
+| Hard crash mid-turn | stale `streaming` row / inflight key on read | partial answer restored, marked `interrupted`, with `checkpointed_at` timestamp | automatic |
+| Spool full / unwritable | `session_journal_spool_full` / `_errors` | terminal write falls back to the shared cache; if that also fails, `durability_degraded` is set and new prompts are refused with retryable `journal_unavailable` | operator frees disk / Redis |
+| Metrics across replicas | per-instance snapshots in cache | merged counters/gauges; cumulative bucket histograms merged additively; Prometheus `/metrics` | next publish |
 | KB ingest during session | version bump | new cache key + bus invalidation | next turn |
 | Slow client / full queue | `QueueFull` | drop **frames**, keep text | automatic |
 | Wedged socket | 5 s send timeout | close connection | client reconnects |
@@ -299,11 +299,12 @@ Health and `/api/metrics` report `backends.cache = "memory"` and `backends.bus =
 
 Two limits run before a socket is admitted (`app/ws/limits.py`):
 
-1. **Per-client attempt rate.** A fixed-window counter keyed by
-   `cuepilot:ratelimit:connect:{identity}:{bucket}` caps opens at
-   `rate_limit_connect_attempts` (30) per `rate_limit_window_s` (60 s). With Redis the
-   counter is cross-replica; with the in-process cache it is per-replica, and
-   `limits.backend` in health says which.
+1. **Per-client attempt rate.** A sliding-window counter keyed by
+   `cuepilot:ratelimit:connect:{identity}` caps opens at
+   `rate_limit_connect_attempts` (30) per `rate_limit_window_s` (60 s). The window is a
+   sorted set in Redis (server `TIME`) and a monotonic deque in memory, so there is no
+   fixed boundary to burst across. With Redis the counter is cross-replica; with the
+   in-process cache it is per-replica, and `limits.backend` in health says which.
 2. **Per-replica connection cap.** `rate_limit_max_connections` (200) bounds this process's
    sockets and turn tasks. It is local on purpose: `ws_active` is a process gauge.
 
@@ -320,10 +321,12 @@ The limiter **fails open** if the cache raises: it logs, increments
 `rate_limit_cache_errors`, and admits the connection. A broken limiter must not take the
 gateway down. The failure is visible in metrics and in the health `limits` block.
 
-Residual caveats: a fixed window admits a burst at a boundary (up to 2× the rate across two
-adjacent windows), and identity is the socket peer unless
-`rate_limit_trust_forwarded_for=true` is set behind a trusted proxy — clients behind one NAT
-share a bucket.
+Residual caveats: identity is the socket peer unless the operator names a trusted header
+(`rate_limit_identity_header`) or enables `rate_limit_trust_forwarded_for` behind a trusted
+proxy — clients behind one NAT still share a bucket by default. The sliding window removes
+the boundary burst but remains a counter, not a leaky bucket. Turn and token budgets are
+enforced per session over the same window; the token budget is post-hoc and may overshoot
+by at most one `llm_max_tokens`.
 
 ## Cross-replica metrics
 
@@ -337,18 +340,20 @@ endpoint merges every live snapshot (`app/telemetry/aggregate.py`):
   visible.
 - **Gauges are summed.** Every gauge published today is additive (`ws_active`); a
   non-additive gauge would need an explicit rule.
-- **Histogram percentiles are approximate.** Each worker publishes at most
-  `metrics_sample_limit` (512) recent observations per histogram. Percentiles are recomputed
-  from those samples; `count` is the true sum. Any histogram where a worker observed more
-  than it published is listed in `aggregation.approximate_histograms`.
+- **Histogram buckets are merged additively.** Each worker publishes the cumulative bucket
+  counts for every histogram, so every observation is counted even when a worker observed
+  far more than a sample cap would have allowed. Percentiles are interpolated within the
+  fixed bucket layout and are therefore bucket-resolution, not exact. The bucket bounds and
+  quantile method (`cumulative_buckets`) are reported in `aggregation`.
 - If the cache cannot be read, the endpoint still returns local metrics and adds
   `aggregation.error`; it does not fail the request.
 - A graceful shutdown deletes its own snapshot so a restart does not linger as a phantom
   second instance for the rest of the TTL.
 
 The response always includes `aggregation: {backend, instances, instance_ids, merged,
-approximate_histograms, sample_limit, note}` so a caller can tell a single-process answer
-from a fleet answer.
+quantile_method, bucket_bounds_ms, note}` so a caller can tell a single-process answer
+from a fleet answer. `GET /metrics` renders the same merged snapshot in Prometheus text
+format.
 
 
 ## Backpressure and slow clients
@@ -410,18 +415,27 @@ applied when the tab is visible again; it is not dropped.
 
 ## Known gaps
 
-- **Rate limiting is coarse.** Fixed windows, socket-peer identity by default, and a
-  per-replica connection cap. A client behind a shared NAT shares a bucket, and a fixed
-  window allows a boundary burst. Per-token or per-turn budgets are not implemented.
-- **Durability is bounded, not guaranteed.** Checkpoints lose at most one interval on a hard
-  crash, terminal writes spool to **local** disk, and the spool is capped at 8 MB. Losing
-  the container filesystem loses the spool; a long Postgres outage can fill it and drop the
-  tail (`session_journal_spool_full`).
-- **Merged percentiles are approximate.** They are recomputed from at most
-  `metrics_sample_limit` samples per worker, and counters reset when a worker restarts.
-  Exact fleet-wide quantiles would need a real metrics backend.
-- **A dropped checkpoint is invisible to the client.** The turn resumes from the last
-  checkpoint, which is usually within 250 ms but is not a frame-exact replay.
+- **Rate limiting is bounded, not exact.** The connection counter is a sliding window over
+  the configured window, so there is no boundary burst, but it is still a counter, not a
+  leaky bucket. Per-session turn and token budgets are enforced, but the token budget is
+  post-hoc: a turn may overshoot by at most one `llm_max_tokens` because the cost is only
+  known after the provider reports usage. The connection cap stays per-replica because
+  `ws_active` is a process gauge. Identity is socket-peer unless the operator names a
+  trusted header or enables `X-Forwarded-For` — an untrusted header is a spoofable key.
+- **Durability is bounded, not guaranteed.** Checkpoints lose at most one interval on a
+  hard crash, and terminal writes try local disk first, then the shared cache. The local
+  spool is capped at 8 MB; the cache fallback depends on Redis persistence, which is the
+  operator's responsibility. When both are unavailable, `durability_degraded` is set and
+  new prompts are refused with retryable `journal_unavailable` until a write or replay
+  succeeds. Losing the container filesystem no longer loses the spool, but it does lose the
+  local copy of anything not yet replayed.
+- **Merged percentiles are bucket-resolution.** Histograms merge cumulative buckets
+  additively, so every observation is counted, but quantiles are interpolated within the
+  fixed bucket layout (`docs/ARCHITECTURE.md`), not exact. Counters still reset when a
+  replica restarts. Exact fleet-wide quantiles need a real metrics backend.
+- **A dropped checkpoint is now visible.** The client renders a restored partial with its
+  `checkpointed_at` timestamp, so the age of the partial is explicit. It is still not a
+  frame-exact replay: a hard crash loses at most one checkpoint interval of text.
 - System audio is macOS and Windows only, and on macOS it needs Screen Recording
   permission; a denied permission surfaces as a reason in the UI, not as silence. Linux
   depends on the sound server and is not claimed.

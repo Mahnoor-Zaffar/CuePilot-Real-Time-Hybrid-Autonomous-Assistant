@@ -10,11 +10,65 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
+from collections import deque
 from typing import Any, Protocol
 
 import redis.asyncio as aioredis
 
 from app.config import Settings
+
+# Sliding-window hit: a sorted set of event timestamps. Redis time is used
+# inside the script so replicas with skewed clocks still agree on the window.
+_WINDOW_HIT_LUA = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local window_ms = tonumber(ARGV[2])
+local member = ARGV[3]
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - window_ms)
+local count = redis.call('ZCARD', key)
+if limit > 0 and count >= limit then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  local retry = 0
+  if oldest[2] then retry = tonumber(oldest[2]) + window_ms - now_ms end
+  if retry < 0 then retry = 0 end
+  return {0, retry}
+end
+redis.call('ZADD', key, now_ms, member)
+redis.call('PEXPIRE', key, window_ms)
+return {1, 0}
+"""
+
+# Sliding-window sum: members carry `<amount>:<unique>` so the value survives
+# the ZSET's single numeric score, which is reserved for the timestamp.
+_WINDOW_SUM_LUA = """
+local key = KEYS[1]
+local window_ms = tonumber(ARGV[1])
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - window_ms)
+local items = redis.call('ZRANGE', key, 0, -1)
+local total = 0
+for _, item in ipairs(items) do
+  local amount = string.match(item, '^([^:]+):')
+  if amount then total = total + tonumber(amount) end
+end
+return tostring(total)
+"""
+
+_WINDOW_ADD_LUA = """
+local key = KEYS[1]
+local window_ms = tonumber(ARGV[1])
+local amount = tonumber(ARGV[2])
+local member = ARGV[3]
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+redis.call('ZADD', key, now_ms, member)
+redis.call('PEXPIRE', key, window_ms)
+return amount
+"""
 
 
 class Cache(Protocol):
@@ -25,6 +79,17 @@ class Cache(Protocol):
     async def delete(self, *keys: str) -> None: ...
     async def incr(self, key: str, ttl_s: int | None = None) -> int: ...
     async def scan(self, prefix: str) -> list[str]: ...
+    async def window_hit(self, key: str, *, limit: int, window_s: float) -> tuple[bool, float]:
+        """Record one event in a sliding window.
+
+        Returns `(allowed, retry_after_s)`. A sliding window has no fixed
+        boundary to burst across, which is why the limiter uses it instead of
+        `incr` on a bucket key.
+        """
+        ...
+
+    async def window_sum(self, key: str, *, window_s: float) -> float: ...
+    async def window_add(self, key: str, *, amount: float, window_s: float) -> None: ...
     async def close(self) -> None: ...
 
 
@@ -33,6 +98,9 @@ class MemoryCache:
 
     def __init__(self) -> None:
         self._data: dict[str, tuple[str, float | None]] = {}
+        # Sliding windows are kept separately: entries are (monotonic, amount)
+        # and are pruned on read, so an idle key costs nothing after expiry.
+        self._windows: dict[str, deque[tuple[float, float]]] = {}
         self._lock = asyncio.Lock()
 
     def _expired(self, key: str) -> bool:
@@ -75,8 +143,41 @@ class MemoryCache:
         async with self._lock:
             return [key for key in self._data if key.startswith(prefix) and not self._expired(key)]
 
+    # sliding windows ------------------------------------------------------
+    def _prune(self, key: str, window_s: float, now: float) -> deque[tuple[float, float]]:
+        entries = self._windows.get(key)
+        if entries is None:
+            entries = deque()
+            self._windows[key] = entries
+        cutoff = now - window_s
+        while entries and entries[0][0] < cutoff:
+            entries.popleft()
+        return entries
+
+    async def window_hit(self, key: str, *, limit: int, window_s: float) -> tuple[bool, float]:
+        async with self._lock:
+            now = time.monotonic()
+            entries = self._prune(key, window_s, now)
+            if limit > 0 and len(entries) >= limit:
+                retry = max(0.0, entries[0][0] + window_s - now) if entries else window_s
+                return False, retry
+            entries.append((now, 1.0))
+            return True, 0.0
+
+    async def window_sum(self, key: str, *, window_s: float) -> float:
+        async with self._lock:
+            entries = self._prune(key, window_s, time.monotonic())
+            return float(sum(amount for _, amount in entries))
+
+    async def window_add(self, key: str, *, amount: float, window_s: float) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            entries = self._prune(key, window_s, now)
+            entries.append((now, float(amount)))
+
     async def close(self) -> None:
         self._data.clear()
+        self._windows.clear()
 
     async def sweep(self) -> int:
         """Drop expired keys; called periodically by the session sweeper."""
@@ -118,6 +219,33 @@ class RedisCache:
         async for key in self._client.scan_iter(match=f"{prefix}*", count=100):
             keys.append(key if isinstance(key, str) else key.decode())
         return keys
+
+    async def window_hit(self, key: str, *, limit: int, window_s: float) -> tuple[bool, float]:
+        allowed, retry_ms = await self._client.eval(
+            _WINDOW_HIT_LUA,
+            1,
+            key,
+            str(limit),
+            str(max(1, int(window_s * 1000))),
+            uuid.uuid4().hex,
+        )
+        return bool(int(allowed)), float(retry_ms) / 1000
+
+    async def window_sum(self, key: str, *, window_s: float) -> float:
+        total = await self._client.eval(
+            _WINDOW_SUM_LUA, 1, key, str(max(1, int(window_s * 1000)))
+        )
+        return float(total)
+
+    async def window_add(self, key: str, *, amount: float, window_s: float) -> None:
+        await self._client.eval(
+            _WINDOW_ADD_LUA,
+            1,
+            key,
+            str(max(1, int(window_s * 1000))),
+            str(amount),
+            f"{amount}:{uuid.uuid4().hex}",
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
