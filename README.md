@@ -17,7 +17,7 @@ rate-limit, caches go stale, and a socket dies mid-sentence. This repo treats th
 product, not as edge cases.
 
 ```
-74 tests · ruff clean · tsc clean · renderer 245 KiB / 76 KiB gzip
+123 tests · ruff clean · tsc clean · renderer 247 KiB / 76 KiB gzip
 ```
 
 ---
@@ -187,7 +187,7 @@ identifiers, queried by **100 hand-labelled queries** (30 identifier, 54 paraphr
 | Paraphrase recall (BM25 → hybrid) | 75.9% → 77.8% | 75.9% → 77.8% |
 | Union recall (either single retriever answers) | 89.0% | **92.0%** |
 | Fusion gap (single retriever found, hybrid lost) | 4 | 5 |
-| Retrieval latency, hybrid p50 / p95 | 2.1 / 2.8 ms | 1.8 / 2.8 ms |
+| Retrieval latency, hybrid p50 / p95 | 1.9 / 2.5 ms | 1.8 / 2.3 ms |
 
 Brackets are 95% percentile-bootstrap intervals over the 100 labelled queries
 (2,000 resamples, paired for comparisons). One query is 1 pp, so read the interval,
@@ -196,11 +196,11 @@ not the point.
 | System metric | Result |
 |---|---|
 | Client-observed TTFT, mock provider with a fixed 120 ms first byte | p50 **~124 ms**, p95 **~130 ms** |
-| Gateway overhead above the provider's first byte | p50 **~1.0 ms**, p95 **~1.4 ms** |
+| Gateway overhead above the provider's first byte | p50 **~1.0 ms**, p95 **~1.1 ms** |
 | Delta coalescing, 300 tokens @ ~90 tok/s | **151 frames** (−49.7%), lossless, 0 drops |
-| Renderer JS heap, idle | **9.5 MB**, 137 DOM nodes |
-| Renderer process working set, idle | **79.9 MB** |
-| Renderer bundle | **245 KiB JS / 76 KiB gzip**, 18 KiB CSS / 4.3 KiB gzip |
+| Renderer JS heap, idle | **9.5 MB**, 139 DOM nodes |
+| Renderer process working set, idle | **80.1 MB** |
+| Renderer bundle | **247 KiB JS / 76 KiB gzip**, 18 KiB CSS / 4.3 KiB gzip |
 
 ### What these numbers do and do not say
 
@@ -232,7 +232,7 @@ not the point.
   caps chunks per document (`retrieval_max_chunks_per_doc`, default 1). That is a product
   fix, not a benchmark trick — returning three chunks of one document is the wrong answer.
 - **Memory is the renderer JS heap, not process RSS.** The sub-50 MB target is met by the
-  9.5 MB heap. Chromium's renderer working set is 79.9 MB and all Electron processes total
+  9.5 MB heap. Chromium's renderer working set is 80.1 MB and all Electron processes total
   ~247 MB; that baseline belongs to the runtime, not the React tree.
 
 ---
@@ -260,11 +260,13 @@ curl -s localhost:8000/api/health | jq '.status, .kb.chunks'
 # 62
 ```
 
-The desktop client is a signed-out macOS build on the
+The desktop client is an unsigned macOS build on the
 [releases page](https://github.com/Mahnoor-Zaffar/CuePilot-Real-Time-Hybrid-Autonomous-Assistant/releases/latest):
-`cuePilot-0.1.0-arm64.dmg` for Apple Silicon, `cuePilot-0.1.0.dmg` for Intel. It is not
-notarized, so the first launch needs **right-click → Open** (or
-`xattr -dr com.apple.quarantine /Applications/cuePilot.app`).
+`cuePilot-0.1.0-arm64.dmg` for Apple Silicon, `cuePilot-0.1.0.dmg` for Intel. This repo has
+no Apple certificate configured, so the published DMGs are not notarized and the first
+launch needs **right-click → Open** (or
+`xattr -dr com.apple.quarantine /Applications/cuePilot.app`). Setting `CSC_LINK` and the
+Apple credentials in the release environment signs and notarizes the DMGs automatically.
 
 ### From source
 
@@ -511,3 +513,9 @@ rule is a deliberate simplification.
 
 For a 10-minute review: `server/app/ws/outbound.py`, `server/app/llm/agent.py`,
 `server/app/retrieval/orchestrator.py`, then `desktop/src/useCueStream.ts`.
+
+---
+
+## License
+
+[MIT](LICENSE).

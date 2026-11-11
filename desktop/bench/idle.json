@@ -1,40 +1,40 @@
 {
-  "measuredAt": "2026-11-09T17:11:50.715Z",
+  "measuredAt": "2026-11-11T08:03:42.555Z",
   "platform": "darwin x64",
   "electron": "33.4.11",
   "chrome": "130.0.6723.191",
   "processes": [
     {
       "type": "Browser",
-      "pid": 24490,
+      "pid": 35574,
       "workingSetMB": 87.3,
       "peakWorkingSetMB": 87.4
     },
     {
       "type": "GPU",
-      "pid": 24491,
-      "workingSetMB": 55.3,
-      "peakWorkingSetMB": 55.5
+      "pid": 35575,
+      "workingSetMB": 55.1,
+      "peakWorkingSetMB": 55.3
     },
     {
       "type": "Utility",
-      "pid": 24492,
-      "workingSetMB": 24.7,
-      "peakWorkingSetMB": 24.7
+      "pid": 35576,
+      "workingSetMB": 24.4,
+      "peakWorkingSetMB": 24.4
     },
     {
       "type": "Tab",
-      "pid": 24493,
-      "workingSetMB": 79.9,
-      "peakWorkingSetMB": 80.2
+      "pid": 35577,
+      "workingSetMB": 80.1,
+      "peakWorkingSetMB": 80.3
     }
   ],
-  "rendererWorkingSetMB": 79.9,
-  "allProcessesWorkingSetMB": 247.2,
+  "rendererWorkingSetMB": 80.1,
+  "allProcessesWorkingSetMB": 246.9,
   "rendererHeap": {
     "usedHeapMB": 9.5,
     "totalHeapMB": 9.5,
-    "domNodes": 137,
+    "domNodes": 139,
     "connected": "connected"
   },
   "note": "Electron's main/GPU/utility processes are a fixed runtime baseline; rendererWorkingSetMB is the app's own UI cost."

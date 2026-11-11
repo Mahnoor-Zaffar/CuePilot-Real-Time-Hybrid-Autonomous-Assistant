@@ -1,6 +1,6 @@
 {
   "environment": {
-    "timestamp": "2026-11-10 07:32 UTC",
+    "timestamp": "2026-11-11 08:03 UTC",
     "python": "3.12.13",
     "platform": "Darwin x86_64",
     "provider": "mock (deterministic)",
@@ -31,9 +31,9 @@
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 0.77,
-        "p95": 1.09,
-        "mean": 0.91
+        "p50": 0.76,
+        "p95": 1.15,
+        "mean": 0.78
       },
       "by_family": {
         "identifier": 1.0,
@@ -1567,9 +1567,9 @@
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 1.44,
-        "p95": 2.01,
-        "mean": 2.19
+        "p50": 1.34,
+        "p95": 1.72,
+        "mean": 2.08
       },
       "by_family": {
         "identifier": 1.0,
@@ -3118,9 +3118,9 @@
       "n": 100,
       "latency_ms": {
         "count": 100,
-        "p50": 2.06,
-        "p95": 2.77,
-        "mean": 2.13
+        "p50": 1.91,
+        "p95": 2.46,
+        "mean": 1.93
       },
       "by_family": {
         "identifier": 1.0,
@@ -4649,7 +4649,7 @@
     "summary": {
       "corpus_documents": 412,
       "corpus_chunks": 796,
-      "ingest_ms": 1427.29,
+      "ingest_ms": 1436.77,
       "embedder": "hash-feature-v1",
       "queries": 100,
       "queries_by_family": {
@@ -4702,33 +4702,33 @@
     "turns": 8,
     "client_ttft_ms": {
       "count": 8,
-      "p50": 124.44,
-      "p95": 130.8,
-      "mean": 125.43
+      "p50": 124.0,
+      "p95": 129.83,
+      "mean": 124.72
     },
     "server_ttft_ms": {
       "count": 8,
-      "p50": 123.5,
-      "p95": 129.59,
-      "mean": 124.36
+      "p50": 122.97,
+      "p95": 128.74,
+      "mean": 123.67
     },
     "gateway_overhead_ms": {
       "count": 8,
-      "p50": 0.99,
-      "p95": 1.4,
-      "mean": 1.07
+      "p50": 1.05,
+      "p95": 1.14,
+      "mean": 1.05
     },
     "frames_per_turn": {
       "count": 8,
       "p50": 17.0,
       "p95": 18.0,
-      "mean": 17.0
+      "mean": 16.88
     },
     "deltas_per_turn": {
       "count": 8,
       "p50": 14.0,
       "p95": 15.0,
-      "mean": 14.0
+      "mean": 13.88
     }
   },
   "coalescing": {
@@ -4736,56 +4736,56 @@
     "frames": 151,
     "frame_reduction_pct": 49.7,
     "tokens_per_frame": 1.99,
-    "stream_seconds": 3.537,
+    "stream_seconds": 3.533,
     "text_lossless": true,
     "dropped_frames": 0
   },
   "bundle": {
-    "js_bytes": 251024,
-    "js_kb": 245.1,
-    "js_gzip_kb": 75.9,
+    "js_bytes": 252803,
+    "js_kb": 246.9,
+    "js_gzip_kb": 76.3,
     "css_bytes": 18532,
     "css_kb": 18.1,
     "css_gzip_kb": 4.3,
     "files": [
-      "index-BpY7Aekn.js",
+      "index-DwVGgDxD.js",
       "index-DFwiWGdp.css"
     ]
   },
   "client_idle": {
-    "measured_at": "2026-11-09T17:11:50.715Z",
+    "measured_at": "2026-11-11T08:03:42.555Z",
     "platform": "darwin x64",
     "electron": "33.4.11",
     "chrome": "130.0.6723.191",
-    "renderer_working_set_mb": 79.9,
-    "all_processes_working_set_mb": 247.2,
+    "renderer_working_set_mb": 80.1,
+    "all_processes_working_set_mb": 246.9,
     "renderer_heap_used_mb": 9.5,
     "renderer_heap_total_mb": 9.5,
-    "dom_nodes": 137,
+    "dom_nodes": 139,
     "processes": [
       {
         "type": "Browser",
-        "pid": 24490,
+        "pid": 35574,
         "workingSetMB": 87.3,
         "peakWorkingSetMB": 87.4
       },
       {
         "type": "GPU",
-        "pid": 24491,
-        "workingSetMB": 55.3,
-        "peakWorkingSetMB": 55.5
+        "pid": 35575,
+        "workingSetMB": 55.1,
+        "peakWorkingSetMB": 55.3
       },
       {
         "type": "Utility",
-        "pid": 24492,
-        "workingSetMB": 24.7,
-        "peakWorkingSetMB": 24.7
+        "pid": 35576,
+        "workingSetMB": 24.4,
+        "peakWorkingSetMB": 24.4
       },
       {
         "type": "Tab",
-        "pid": 24493,
-        "workingSetMB": 79.9,
-        "peakWorkingSetMB": 80.2
+        "pid": 35577,
+        "workingSetMB": 80.1,
+        "peakWorkingSetMB": 80.3
       }
     ]
   }
