@@ -88,6 +88,17 @@ class Settings(BaseSettings):
     turn_history_limit: int = 24
     session_ttl_s: int = 3600
 
+    # ── client limits ──────────────────────────────────────────────────────
+    # A fixed window keyed by client identity, shared through the cache. The
+    # connection cap is per replica because `ws_active` is a process gauge.
+    # Behind a trusted proxy set rate_limit_trust_forwarded_for to use the
+    # left-most X-Forwarded-For address instead of the socket peer.
+    rate_limit_enabled: bool = True
+    rate_limit_window_s: int = 60
+    rate_limit_connect_attempts: int = 30
+    rate_limit_max_connections: int = 200
+    rate_limit_trust_forwarded_for: bool = False
+
     # ── durable sessions ───────────────────────────────────────────────────
     # Redis mirrors sessions; the journal is the record. Writes are queued so a
     # slow Postgres costs transcript lines, never stream latency.
@@ -95,6 +106,14 @@ class Settings(BaseSettings):
     session_journal_queue: int = 256
     session_journal_timeout_s: float = 5.0
     session_journal_drain_s: float = 3.0
+    # Partial answers are checkpointed while streaming. A hard crash loses at
+    # most one interval of text. Checkpoints are droppable; terminal writes are
+    # not, so those spool to local disk when the queue or Postgres is unavailable.
+    turn_checkpoint_interval_ms: int = 250
+    turn_checkpoint_stale_s: float = 60.0
+    session_journal_spool_path: str = "data/journal-spool.ndjson"
+    session_journal_spool_max_bytes: int = 8_000_000
+    session_journal_spool_retry_s: float = 30.0
 
     # ── audio ingest ───────────────────────────────────────────────────────
     audio_enabled: bool = True
@@ -109,6 +128,12 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://127.0.0.1:4318"
     otel_service_name: str = "cuepilot-gateway"
     trace_buffer_turns: int = 200
+    # Each replica publishes a sampled snapshot to the shared cache; /api/metrics
+    # merges every live snapshot. Percentiles are recomputed from the most recent
+    # `metrics_sample_limit` observations per worker, and say so when approximate.
+    metrics_publish_interval_s: float = 10.0
+    metrics_publish_ttl_s: int = 30
+    metrics_sample_limit: int = 512
 
     @field_validator("cors_origins", "llm_fallback_models", mode="before")
     @classmethod

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api", tags=["observability"], dependencies=[Depends(
 
 @router.get("/metrics")
 async def metrics(runtime: Runtime = Depends(get_runtime)) -> dict[str, Any]:
-    snapshot = runtime.metrics.snapshot()
+    snapshot = await runtime.aggregated_metrics()
     snapshot["backends"] = {
         "cache": runtime.cache.backend,
         "bus": runtime.bus.backend,

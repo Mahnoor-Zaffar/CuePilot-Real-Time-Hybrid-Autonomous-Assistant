@@ -258,6 +258,9 @@ function AssistantTurn({
       ) : null}
 
       {message.aborted ? <div className="inline-note">Generation stopped.</div> : null}
+      {message.interrupted && !message.streaming ? (
+        <div className="inline-note">Partial answer restored after an interruption.</div>
+      ) : null}
 
       <SourceList hits={message.sources ?? []} retrieval={message.retrieval} />
 

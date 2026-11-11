@@ -32,15 +32,19 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
-# Run unprivileged. The image never writes to disk, so no volumes are required.
+# Run unprivileged. The only writable path is /app/data: the journal spool spills
+# terminal turns there when Postgres is unavailable. Mount a volume if the spool
+# must survive container replacement; without one it is process-local scratch.
 RUN groupadd --system --gid 10001 cuepilot \
-    && useradd --system --uid 10001 --gid cuepilot --create-home cuepilot
+    && useradd --system --uid 10001 --gid cuepilot --create-home cuepilot \
+    && mkdir -p /app/data && chown cuepilot:cuepilot /app/data
 
 WORKDIR /app
 COPY --from=builder --chown=cuepilot:cuepilot /app /app
 
 USER cuepilot
 EXPOSE 8000
+VOLUME ["/app/data"]
 
 # Starts degraded (in-process vector store, cache and bus) if Postgres/Redis are
 # unreachable, so the healthcheck is meaningful with or without infrastructure.

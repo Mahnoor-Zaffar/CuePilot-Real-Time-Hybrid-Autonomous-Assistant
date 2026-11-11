@@ -27,6 +27,10 @@ def make_settings(**overrides: Any) -> Settings:
         "mock_ttft_ms": 0.0,
         "audio_enabled": True,
         "api_token": None,
+        # Tests must not leave spool files behind; spool tests opt in with a
+        # tmp_path-backed path.
+        "session_journal_spool_path": "",
+        "metrics_publish_interval_s": 3600.0,
     }
     base.update(overrides)
     return Settings(**base)

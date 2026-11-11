@@ -24,6 +24,7 @@ class Cache(Protocol):
     async def set(self, key: str, value: str, ttl_s: int | None = None) -> None: ...
     async def delete(self, *keys: str) -> None: ...
     async def incr(self, key: str, ttl_s: int | None = None) -> int: ...
+    async def scan(self, prefix: str) -> list[str]: ...
     async def close(self) -> None: ...
 
 
@@ -70,6 +71,10 @@ class MemoryCache:
             self._data[key] = (str(current), expires_at)
             return current
 
+    async def scan(self, prefix: str) -> list[str]:
+        async with self._lock:
+            return [key for key in self._data if key.startswith(prefix) and not self._expired(key)]
+
     async def close(self) -> None:
         self._data.clear()
 
@@ -107,6 +112,12 @@ class RedisCache:
         if ttl_s and value == 1:
             await self._client.expire(key, ttl_s)
         return int(value)
+
+    async def scan(self, prefix: str) -> list[str]:
+        keys: list[str] = []
+        async for key in self._client.scan_iter(match=f"{prefix}*", count=100):
+            keys.append(key if isinstance(key, str) else key.decode())
+        return keys
 
     async def close(self) -> None:
         await self._client.aclose()

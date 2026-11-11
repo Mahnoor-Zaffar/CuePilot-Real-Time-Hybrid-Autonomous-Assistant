@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 import uuid
@@ -21,9 +22,11 @@ from app.llm.tools import ToolRegistry
 from app.retrieval.corpus import all_documents
 from app.retrieval.embedder import build_embedder
 from app.retrieval.orchestrator import HybridRetriever
+from app.telemetry.aggregate import merge_snapshots
 from app.telemetry.metrics import Metrics
 from app.telemetry.otel import TraceRecorder, configure_tracing
 from app.ws.journal import TurnJournal
+from app.ws.limits import ClientLimiter
 from app.ws.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -42,11 +45,13 @@ class Runtime:
     tools: ToolRegistry
     agent: Agent
     sessions: SessionManager
+    limiter: ClientLimiter
     instance_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     degraded: list[str] = field(default_factory=list)
     seed_info: dict[str, Any] = field(default_factory=dict)
     started_at: float = field(default_factory=time.time)
     _bus_task: asyncio.Task | None = None
+    _metrics_task: asyncio.Task | None = None
 
     # ── construction ───────────────────────────────────────────────────────
     @classmethod
@@ -82,6 +87,7 @@ class Runtime:
         if settings.session_journal_enabled and isinstance(store, PgVectorStore):
             journal = TurnJournal(store.pool, settings, metrics)
         sessions = SessionManager(cache, settings, journal)
+        limiter = ClientLimiter(cache, settings, metrics)
 
         runtime = cls(
             settings=settings,
@@ -95,6 +101,7 @@ class Runtime:
             tools=tools,
             agent=agent,
             sessions=sessions,
+            limiter=limiter,
             degraded=degraded,
         )
         metrics.gauge("ws_active", 0)
@@ -106,6 +113,8 @@ class Runtime:
         if self.settings.seed_on_start:
             await self._seed_if_empty()
         await self.sessions.start()
+        await self._publish_metrics()
+        self._metrics_task = asyncio.create_task(self._metrics_loop(), name="metrics-publisher")
         self._bus_task = asyncio.create_task(self._bus_loop(), name="event-bus")
         logger.info(
             "runtime ready instance=%s provider=%s model=%s store=%s cache=%s chunks=%s "
@@ -126,7 +135,16 @@ class Runtime:
             self._bus_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._bus_task
+        if self._metrics_task:
+            self._metrics_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._metrics_task
+            self._metrics_task = None
         await self.sessions.stop()
+        # Remove this replica's published snapshot so a graceful restart does
+        # not look like a second instance for the rest of the TTL.
+        with contextlib.suppress(Exception):
+            await self.cache.delete(self.metrics_key)
         with contextlib.suppress(Exception):
             await self.provider.close()
         with contextlib.suppress(Exception):
@@ -173,6 +191,84 @@ class Runtime:
         except Exception:  # noqa: BLE001
             logger.exception("event bus loop failed")
 
+    # ── metrics across replicas ────────────────────────────────────────────
+    @property
+    def metrics_key(self) -> str:
+        return f"cuepilot:metrics:{self.instance_id}"
+
+    async def _metrics_loop(self) -> None:
+        interval = max(1.0, self.settings.metrics_publish_interval_s)
+        while True:
+            await asyncio.sleep(interval)
+            await self._publish_metrics()
+
+    async def _publish_metrics(self) -> None:
+        try:
+            snapshot = self.metrics.snapshot(
+                include_samples=True, sample_limit=self.settings.metrics_sample_limit
+            )
+            snapshot["instance_id"] = self.instance_id
+            snapshot["published_at"] = time.time()
+            await self.cache.set(
+                self.metrics_key,
+                json.dumps(snapshot, separators=(",", ":")),
+                self.settings.metrics_publish_ttl_s,
+            )
+        except Exception as exc:  # noqa: BLE001 - metrics must never break the app
+            self.metrics.incr("metrics_publish_failures")
+            logger.debug("metrics publish failed: %s", exc)
+
+    async def aggregated_metrics(self) -> dict[str, Any]:
+        """Publish this replica, then merge every live snapshot in the cache."""
+        local = self.metrics.snapshot(
+            include_samples=True, sample_limit=self.settings.metrics_sample_limit
+        )
+        local["instance_id"] = self.instance_id
+        local["published_at"] = time.time()
+        snapshots: dict[str, dict[str, Any]] = {self.instance_id: local}
+        error: str | None = None
+        try:
+            await self.cache.set(
+                self.metrics_key,
+                json.dumps(local, separators=(",", ":")),
+                self.settings.metrics_publish_ttl_s,
+            )
+            for key in await self.cache.scan("cuepilot:metrics:"):
+                if key == self.metrics_key:
+                    continue
+                raw = await self.cache.get(key)
+                if not raw:
+                    continue
+                try:
+                    snapshot = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(snapshot, dict):
+                    continue
+                instance_id = str(snapshot.get("instance_id") or key.rsplit(":", 1)[-1])
+                snapshots[instance_id] = snapshot
+        except Exception as exc:  # noqa: BLE001 - local metrics are still useful
+            error = f"{type(exc).__name__}: {exc}"
+            self.metrics.incr("metrics_aggregation_failures")
+
+        merged = merge_snapshots(list(snapshots.values()))
+        approximate = merged.pop("approximate_histograms", [])
+        merged["aggregation"] = {
+            "backend": self.cache.backend,
+            "instances": len(snapshots),
+            "instance_ids": sorted(snapshots),
+            "merged": len(snapshots) > 1,
+            "approximate_histograms": approximate,
+            "sample_limit": self.settings.metrics_sample_limit,
+            "note": (
+                "histogram percentiles merge the most recent samples per instance; "
+                "counters are summed and reset when a replica restarts"
+            ),
+        }
+        if error is not None:
+            merged["aggregation"]["error"] = error
+        return merged
+
     # ── health ─────────────────────────────────────────────────────────────
     async def health(self) -> dict[str, Any]:
         return {
@@ -198,6 +294,7 @@ class Runtime:
                 if self.sessions.journal is not None
                 else {"backend": "none"}
             ),
+            "limits": self.limiter.stats(),
             "transcription_enabled": bool(self.settings.openai_api_key)
             and self.settings.audio_enabled,
             "sessions_active": self.sessions.active_sessions,

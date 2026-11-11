@@ -12,6 +12,14 @@ from collections import deque
 from dataclasses import dataclass, field
 
 
+def percentile(ordered: list[float], p: float) -> float | None:
+    """Nearest-rank percentile over an already-sorted list."""
+    if not ordered:
+        return None
+    idx = min(len(ordered) - 1, max(0, int(math.ceil(p / 100 * len(ordered))) - 1))
+    return round(ordered[idx], 2)
+
+
 @dataclass
 class Histogram:
     """Bounded ring buffer of observations with percentile helpers."""
@@ -26,29 +34,48 @@ class Histogram:
         if value_ms >= 0 and math.isfinite(value_ms):
             self._samples.append(float(value_ms))
 
-    def percentile(self, p: float) -> float | None:
-        if not self._samples:
-            return None
-        ordered = sorted(self._samples)
-        idx = min(len(ordered) - 1, max(0, int(math.ceil(p / 100 * len(ordered))) - 1))
-        return round(ordered[idx], 2)
+    def samples(self, limit: int = 512) -> list[float]:
+        """Most recent observations, capped. Used to merge across replicas."""
+        if limit <= 0:
+            return []
+        return list(self._samples)[-limit:]
 
-    def snapshot(self) -> dict[str, float | int | None]:
+    def percentile(self, p: float) -> float | None:
+        return percentile(sorted(self._samples), p)
+
+    def snapshot(
+        self, *, include_samples: bool = False, sample_limit: int = 512
+    ) -> dict[str, float | int | list[float] | None]:
         if not self._samples:
-            return {"count": 0, "p50": None, "p95": None, "p99": None, "mean": None}
-        ordered = sorted(self._samples)
-        return {
-            "count": len(ordered),
-            "p50": self.percentile(50),
-            "p95": self.percentile(95),
-            "p99": self.percentile(99),
-            "mean": round(sum(ordered) / len(ordered), 2),
-            "max": round(ordered[-1], 2),
-        }
+            snapshot: dict[str, float | int | list[float] | None] = {
+                "count": 0,
+                "p50": None,
+                "p95": None,
+                "p99": None,
+                "mean": None,
+                "max": None,
+            }
+        else:
+            ordered = sorted(self._samples)
+            snapshot = {
+                "count": len(ordered),
+                "p50": percentile(ordered, 50),
+                "p95": percentile(ordered, 95),
+                "p99": percentile(ordered, 99),
+                "mean": round(sum(ordered) / len(ordered), 2),
+                "max": round(ordered[-1], 2),
+            }
+        if include_samples:
+            snapshot["samples"] = self.samples(sample_limit)
+        return snapshot
 
 
 class Metrics:
-    """Single-process metric registry (per-worker; scrape via /api/metrics)."""
+    """Single-process metric registry.
+
+    Each replica publishes a sampled snapshot; `/api/metrics` merges the live
+    snapshots (see `telemetry/aggregate.py`) instead of reporting one worker.
+    """
 
     def __init__(self) -> None:
         self.started_at = time.time()
@@ -86,11 +113,14 @@ class Metrics:
         total = hits + misses
         return round(hits / total, 4) if total else None
 
-    def snapshot(self) -> dict:
+    def snapshot(self, *, include_samples: bool = False, sample_limit: int = 512) -> dict:
         return {
             "uptime_s": round(time.time() - self.started_at, 1),
             "counters": {k: round(v, 3) for k, v in sorted(self.counters.items())},
             "gauges": {k: round(v, 3) for k, v in sorted(self.gauges.items())},
-            "histograms": {k: h.snapshot() for k, h in sorted(self.histograms.items())},
+            "histograms": {
+                k: h.snapshot(include_samples=include_samples, sample_limit=sample_limit)
+                for k, h in sorted(self.histograms.items())
+            },
             "derived": {"retrieval_cache_hit_rate": self.cache_hit_rate},
         }

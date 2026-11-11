@@ -131,6 +131,22 @@ Only after a resumed handshake, before any turn frames. Replaces the client's tr
 
 At most the last 20 messages. Roles are only `user` and `assistant`.
 
+A turn restored from a streaming checkpoint is flagged rather than presented as finished:
+
+```json
+{
+  "type": "history",
+  "messages": [
+    { "role": "user", "content": "explain the retry policy", "interrupted": true },
+    { "role": "assistant", "content": "The client backs off", "interrupted": true }
+  ]
+}
+```
+
+`interrupted: true` means the server recovered a partial turn (a crash or a replica that
+stopped checkpointing). The text is the last checkpoint, not necessarily the final answer.
+Clients should render it as partial and may offer a resend.
+
 ### `ack`
 
 ```json
@@ -280,6 +296,8 @@ Error codes:
 | `hello_timeout` | connection | No `hello` within 10 s; socket closes. | no |
 | `protocol_mismatch` | connection | Unsupported `protocol_version`; socket closes. | no |
 | `unauthorized` | connection | Bad/missing token; socket closes with 4401. | no |
+| `client_rate_limited` | connection | Too many connection opens for this client in the window; socket closes with 4429. | yes |
+| `connection_cap` | connection | This replica is at its concurrent-socket cap; socket closes with 4429. | yes |
 | `rate_limited` | turn | Provider 429 after retries/fallback. | yes |
 | `provider_unavailable` | turn | Provider 5xx/transport failure. | yes |
 | `context_overflow` | turn | Prompt exceeded the model window. | no |
@@ -370,6 +388,7 @@ A successful `ready` resets the attempt counter.
 | `4400` | Protocol error: bad first frame, invalid JSON, version mismatch. |
 | `4401` | Unauthorized: missing/wrong `?token=`. |
 | `4408` | Stale: no client frame for 2.5× the heartbeat interval. |
+| `4429` | Rate limited: too many opens in the window, or this replica is at its connection cap. |
 
 ## Minimal client example
 

@@ -17,7 +17,7 @@ rate-limit, caches go stale, and a socket dies mid-sentence. This repo treats th
 product, not as edge cases.
 
 ```
-123 tests · ruff clean · tsc clean · renderer 247 KiB / 76 KiB gzip
+140 tests · ruff clean · tsc clean · renderer 253 KiB / 78 KiB gzip
 ```
 
 ---
@@ -200,7 +200,7 @@ not the point.
 | Delta coalescing, 300 tokens @ ~90 tok/s | **151 frames** (−49.7%), lossless, 0 drops |
 | Renderer JS heap, idle | **9.5 MB**, 139 DOM nodes |
 | Renderer process working set, idle | **80.1 MB** |
-| Renderer bundle | **247 KiB JS / 76 KiB gzip**, 18 KiB CSS / 4.3 KiB gzip |
+| Renderer bundle | **253 KiB JS / 78 KiB gzip**, 18.5 KiB CSS / 4.4 KiB gzip |
 
 ### What these numbers do and do not say
 
@@ -320,8 +320,16 @@ Every setting is `CUEPILOT_<UPPER_SNAKE>`; the full reference is [`.env.example`
 | `CUEPILOT_DATABASE_URL` | `…@127.0.0.1:5433/cuepilot` | pgvector store; migrated on boot |
 | `CUEPILOT_REDIS_URL` | `redis://127.0.0.1:6380/0` | Cache, pub/sub, session mirror |
 | `CUEPILOT_SESSION_JOURNAL_ENABLED` | `true` | Write sessions and turns through to Postgres |
-| `CUEPILOT_SESSION_JOURNAL_QUEUE` | `256` | Bounded write-behind queue; full means dropped writes, never a stalled stream |
+| `CUEPILOT_SESSION_JOURNAL_QUEUE` | `256` | Bounded write-behind queue; checkpoints drop, terminal turns spool |
 | `CUEPILOT_SESSION_JOURNAL_DRAIN_S` | `3.0` | Graceful-shutdown drain budget for the journal worker |
+| `CUEPILOT_TURN_CHECKPOINT_INTERVAL_MS` | `250` | Streaming checkpoint cadence; a hard crash loses at most one interval |
+| `CUEPILOT_SESSION_JOURNAL_SPOOL_PATH` | `data/journal-spool.ndjson` | Local NDJSON spill for terminal writes when the queue or Postgres fails |
+| `CUEPILOT_SESSION_JOURNAL_SPOOL_MAX_BYTES` | `8000000` | Spool cap; full means the terminal write is counted as lost |
+| `CUEPILOT_RATE_LIMIT_CONNECT_ATTEMPTS` | `30` | Per-client connection opens per window |
+| `CUEPILOT_RATE_LIMIT_MAX_CONNECTIONS` | `200` | Per-replica concurrent socket cap |
+| `CUEPILOT_RATE_LIMIT_TRUST_FORWARDED_FOR` | `false` | Use the left-most `X-Forwarded-For` hop (only behind a trusted proxy) |
+| `CUEPILOT_METRICS_PUBLISH_INTERVAL_S` | `10.0` | How often a replica publishes its sampled snapshot |
+| `CUEPILOT_METRICS_SAMPLE_LIMIT` | `512` | Observations per histogram published for cross-replica merging |
 | `CUEPILOT_ALLOW_DEGRADED_INFRA` | `true` | Fall back instead of failing startup |
 | `CUEPILOT_OTEL_EXPORTER` | `none` | `none` \| `console` \| `otlp` |
 
@@ -340,7 +348,7 @@ an embedding-width rebuild leaves the turn history intact. Run it as its own ste
 ## Quality gates
 
 ```bash
-make check        # ruff + tsc (renderer and electron) + 123 tests + docs gate
+make check        # ruff + tsc (renderer and electron) + 140 tests + docs gate
 make test-local   # real semantic embedder tests (needs: cd server && uv sync --extra local)
 make migrate      # apply SQL migrations without booting the gateway
 make bench        # regenerate docs/metrics.json and docs/METRICS.md
@@ -374,9 +382,9 @@ runs on every invocation and health correctly reports `degraded`.
 | Streaming | Coalescing is lossless; control frames ordered before `done`; full queue drops frames not text |
 | Retrieval | Exact-identifier ranking, fused provenance, cache invalidation on version bump, single-retriever degradation |
 | Agent | Tool loop, history append, rate-limit error frame, no retry after first token, cancellation |
-| WebSocket | Handshake, abort, reconnect + history replay, unknown session, bad frame, audio ack, auth |
-| Journal | Queue drops under pressure, write retry/failure counters, cache-miss recovery, Postgres round-trip, orphan turn insert |
-| API | Health, search, ingest + invalidation, metrics/traces after a turn |
+| WebSocket | Handshake, abort, reconnect + history replay, unknown session, bad frame, audio ack, auth, rate limit, per-replica cap, limiter fail-open |
+| Journal | Queue drops, checkpoint replacement, stale-turn recovery, terminal spool + replay, write retry/failure counters, cache-miss recovery, Postgres round-trip, orphan turn insert |
+| API | Health (limits + journal), search, ingest + invalidation, metrics/traces after a turn, cross-replica merge semantics |
 
 ---
 
@@ -387,14 +395,17 @@ Handled explicitly, with detection and recovery documented per case:
 | Failure | Behavior |
 |---|---|
 | Gateway unreachable | Full-jitter reconnect: `max(250 ms, rand · min(8 s, 250 · 2ⁿ))`, 8 attempts |
-| Server restart mid-turn | Reconnect, resume session, replay last 20 messages |
+| Server restart mid-turn | Reconnect, resume session, replay last 20 messages; the partial turn is restored and marked `interrupted` |
+| Connection flood | Fixed-window per-client limit + per-replica cap; `client_rate_limited` / `connection_cap`, close `4429` |
 | Provider 429 / 5xx | Retry with backoff → pre-token model fallback → typed retryable error |
 | Provider dies after first token | No retry; terminal error, partial answer preserved |
 | Tool timeout / bad args | Error result fed to the model; turn continues |
 | One retriever down | Fuse the survivor; `degraded` surfaced in frame and UI |
 | Postgres / Redis absent | In-memory store / cache / bus; health reports degraded. Sessions stay mirror-only and `journal.backend` is `none` |
-| Journal queue full | Drop the write and count it (`journal.dropped`); the stream never blocks on durability |
+| Journal queue full | Checkpoints drop (`journal.dropped`); terminal turns spool to disk and replay; the stream never blocks on durability |
+| Hard crash mid-turn | Streaming checkpoints every 250 ms; stale rows are marked `interrupted` on the next read |
 | Postgres lost mid-session | Redis still serves the hot session; resume falls back to a new session only once both are gone |
+| Multiple replicas | Each publishes sampled metrics to the shared cache; `/api/metrics` merges them and names approximate histograms |
 | Slow client | Drop delta frames, re-queue text; control frames wait |
 | Silent client | Heartbeat timeout closes `4408`; client reconnects |
 
@@ -417,7 +428,7 @@ server/
     api/          health · KB ingest/search/stats · metrics · traces
   bench/          reproducible harness · 100 labelled queries · bootstrap stats · opt-in BEIR subset
   scripts/        migrate.py (apply schema without booting)
-  tests/          123 tests
+  tests/          140 tests
   Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
 desktop/
   src/            React UI + useCueStream (the entire client transport)
@@ -466,10 +477,11 @@ The cap is applied after ranking and before truncation, so relevance order is un
 Move lexical search into Postgres (`tsvector`/`pg_trgm`) or OpenSearch so replicas stop
 building private BM25 indexes. Replace the O(n) memory fallback with the real ANN path only.
 Partition the turn journal by session and age, and stream it to an analytics sink instead
-of reading it back one session at a time. Aggregate metrics per worker instead of scraping a
-single process. Add a reranker and per-client rate limits. Concurrent turns per session would
-need per-turn outbound queues and an explicit merge policy — the current single-active-turn
-rule is a deliberate simplification.
+of reading it back one session at a time. Replace the sampled cross-replica metrics merge
+with a real metrics backend (Prometheus or OTLP) once exact fleet-wide quantiles matter.
+Add a reranker and move rate limiting from per-connection to per-token or per-turn budgets.
+Concurrent turns per session would need per-turn outbound queues and an explicit merge
+policy — the current single-active-turn rule is a deliberate simplification.
 
 ---
 
@@ -484,10 +496,11 @@ audio capture are real. The rest is scoped on purpose:
 | **System audio: macOS + Windows** | macOS needs Screen Recording; Electron 33 needs two Chromium flags. A denial is surfaced with a reason. Linux is not claimed. |
 | **Synthetic evaluation corpus** | Intervals measure label noise on 100 hand-built queries, not your domain. `make beir` adds an external scifact reference; it is not the headline. |
 | **Two intentional doubles** | `MockProvider` (deterministic, offline) and `HashEmbedder` (lexical proxy, zero-dep default). The real semantic paths (`model2vec`, hosted embeddings) run in CI. |
+| **Bounded operational hardening** | Rate limits are coarse (fixed window, socket-peer identity). Crash recovery loses ≤250 ms of text. Terminal writes spool to a capped local file, not a second database. Details in [known gaps](docs/FAILURE_MODES.md#known-gaps). |
 
-Operational gaps — no per-client rate limiting, partial turns lost on a hard crash,
-droppable journal writes, per-worker metrics — are in
-[docs/FAILURE_MODES.md](docs/FAILURE_MODES.md#known-gaps).
+The four original operational gaps — per-client rate limiting, partial-turn crash recovery,
+droppable journal writes, per-worker metrics — are closed; what remains is the residual
+caveat in each, documented in [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md#known-gaps).
 
 ---
 

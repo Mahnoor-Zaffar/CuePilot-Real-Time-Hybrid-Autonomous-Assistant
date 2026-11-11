@@ -34,6 +34,7 @@ Non-goals: multi-tenant authz, model fine-tuning.
 │                                                                                       │
 │  Connection (ws/connection.py)                                                        │
 │    ├── handshake + auth + heartbeat + close codes                                     │
+│    ├── ClientLimiter (ws/limits.py): shared attempt window + per-replica cap          │
 │    ├── OutboundStream (ws/outbound.py): per-turn buffers, 16 ms flush, bounded queue  │
 │    └── SessionManager (ws/session.py): hot dict + Redis mirror + Postgres journal     │
 │                                                                                       │
@@ -232,16 +233,31 @@ Three tiers, each with one job:
 
 Writes are **write-behind**. `save()` writes Redis synchronously, so the fast path stays
 coherent, and enqueues the Postgres upsert on a bounded `asyncio.Queue` drained by one
-worker. A turn is enqueued on `done` and on `abort` — the same two terminal points where
-the socket emits its final frame. The stream never awaits durability: if Postgres stalls,
-the queue fills and writes are dropped with a counter (`journal.dropped` in `/api/health`),
-which costs a transcript line rather than the turn.
+worker.
+
+A turn has two write classes:
+
+- **Checkpoints** (`status = "streaming"`) are enqueued every
+  `turn_checkpoint_interval_ms` (250 ms). They are droppable: the next checkpoint carries
+  the whole answer so far, so shedding one costs at most one interval of crash protection.
+- **Terminal writes** (`done`, `aborted`, `error`) are the transcript. When the queue is full
+  or the write fails after its retry, the record is appended to a bounded local NDJSON spool
+  and replayed in the background (`session_journal_spool_retry_s`, 30 s) and once during
+  graceful shutdown. The spool is capped at `session_journal_spool_max_bytes` (8 MB); when
+  full, the write is counted as lost (`session_journal_spool_full`).
+
+The stream never awaits durability: if Postgres stalls, checkpoints drop
+(`journal.dropped`) and terminal writes spill, which costs a little latency in the worst
+case rather than the turn. `turns.updated_at` is what makes stale recovery possible: a
+`streaming` row older than `turn_checkpoint_stale_s` (60 s) is marked
+`aborted`/`interrupted` on the read path, so no separate janitor is needed.
 
 Reads go hot dict → Redis → Postgres → new session. A Redis miss is a cache miss, not data
 loss: the journal rebuilds the header plus the most recent `turn_history_limit` turns, and
-the connection replays history exactly as it would after a Redis hit. With no Postgres the
-journal is absent (`journal.backend = "none"`) and the manager is mirror-only, which the
-health endpoint reports instead of hiding.
+the connection replays history exactly as it would after a Redis hit. Replayed turns that
+were recovered from a checkpoint carry `interrupted: true`. With no Postgres the journal is
+absent (`journal.backend = "none"`) and the manager is mirror-only, which the health
+endpoint reports instead of hiding.
 
 On connect the client sends its stored session id. If found anywhere in that chain, the
 server marks the connection `resumed: true` and replays `history` (last 20 messages). If
@@ -313,12 +329,21 @@ Default is `none`: spans are recorded in-process only.
 
 `Metrics` is dependency-free: counters, gauges, and bounded histograms (`ttft_ms`,
 `turn_total_ms`, `retrieval_ms`, `bm25_ms`, `dense_ms`, `fusion_ms`, `tool_call_ms`,
-`ws_send_ms`). `GET /api/metrics` serialises the snapshot plus backend identities and
-derived cache hit rate. Counters of note: `delta_frames_sent`, `delta_tokens_sent`,
+`ws_send_ms`). `GET /api/metrics` returns the merged fleet snapshot plus backend identities
+and derived cache hit rate. Counters of note: `delta_frames_sent`, `delta_tokens_sent`,
 `delta_frames_dropped`, `control_frames_waited`, `provider_retries`, `provider_fallbacks`,
-`turns_aborted`, `ws_bad_frames`, `ws_stale_closed`, `ws_sessions_resumed`.
+`turns_aborted`, `ws_bad_frames`, `ws_stale_closed`, `ws_sessions_resumed`,
+`ws_rejected_rate_limit`, `ws_rejected_connection_cap`, `rate_limit_cache_errors`,
+`turn_checkpoints_dropped`, `session_journal_spooled`, `session_journal_replayed`.
 
-Per-worker by design; a real deployment would scrape each worker or push to a collector.
+Each replica publishes a sampled snapshot to `cuepilot:metrics:{instance_id}` every
+`metrics_publish_interval_s` (10 s) with a TTL of `metrics_publish_ttl_s` (30 s).
+`/api/metrics` merges every live snapshot: counters and additive gauges are summed,
+histogram percentiles are recomputed from at most `metrics_sample_limit` (512) recent
+observations per worker, and any histogram where a worker observed more than it published is
+listed in `aggregation.approximate_histograms`. The `aggregation` block also names the
+instances and whether the response is merged. The merge is pure and unit-tested
+(`telemetry/aggregate.py`); it is a stopgap for a real metrics backend, not a replacement.
 
 ## Data model
 
@@ -359,12 +384,17 @@ OTel disabled-by-export.
   (`tsvector`/`pg_trgm`) or OpenSearch and treat the store as the only index.
 - **Exact search fallback.** `MemoryVectorStore` is O(n) per query. Fine for thousands of
   chunks, wrong for millions; it exists to keep the demo and tests hermetic.
-- **Per-process metrics.** Correct but not aggregated. Add an OTel metrics exporter or a
-  Prometheus endpoint per worker.
-- **Write-behind journal.** One worker drains the queue, so a slow Postgres costs
-  transcript lines, never stream latency. At scale the `turns` table needs partitioning by
-  session and age, and the journal should stream to an analytics sink rather than being read
+- **Sampled cross-replica metrics.** Counters and gauges merge exactly; histogram
+  percentiles merge the most recent samples per worker and are flagged when approximate. At
+  scale, push to Prometheus/OTLP and stop merging in-process.
+- **Write-behind journal with a local spool.** One worker drains the queue, so a slow
+  Postgres costs checkpoints and, at worst, spills terminal writes to a capped local file.
+  At scale the `turns` table needs partitioning by session and age, the spool should be a
+  durable queue, and the journal should stream to an analytics sink rather than being read
   back one session at a time.
+- **Coarse rate limiting.** A fixed-window per-client attempt counter plus a per-replica
+  socket cap. Per-token or per-turn budgets, and identity behind a shared NAT, are open
+  work.
 - **No cross-encoder rerank.** RRF is cheap and robust; a reranker would improve precision
   on a larger corpus at the cost of a second model call.
 - **Single active turn per session.** Simplifies cancellation and ordering. Concurrent

@@ -12,6 +12,8 @@ def test_root_and_health(client: TestClient) -> None:
     assert health["backends"]["vector_store"] == "memory"
     assert health["kb"]["chunks"] > 0
     assert health["provider"]["mode"] == "mock"
+    assert health["limits"]["enabled"] is True
+    assert health["journal"]["backend"] == "none"
 
 
 def test_search_endpoint(client: TestClient) -> None:
@@ -64,6 +66,9 @@ def test_metrics_and_traces_after_a_turn(client: TestClient) -> None:
     assert metrics["counters"]["turns_total"] >= 1
     assert metrics["histograms"]["ttft_ms"]["count"] >= 1
     assert metrics["backends"]["provider"] == "mock"
+    assert metrics["aggregation"]["instances"] == 1
+    assert metrics["aggregation"]["merged"] is False
+    assert "samples" not in metrics["histograms"]["ttft_ms"]
 
     traces = client.get("/api/traces").json()["traces"]
     assert traces

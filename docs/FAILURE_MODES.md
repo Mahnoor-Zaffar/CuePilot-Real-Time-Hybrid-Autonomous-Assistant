@@ -12,7 +12,8 @@ degradation instead of hiding it.
 | Failure | Detection | Behavior | Recovery |
 |---|---|---|---|
 | Gateway unreachable | socket close/error | jittered reconnect banner | automatic, ≤8 attempts |
-| Server restart mid-turn | close during stream | reconnect + resume + replay | automatic |
+| Server restart mid-turn | close during stream | reconnect + resume + replay; partial turn marked `interrupted` | automatic |
+| Connection flood | shared counter + per-replica gauge | `client_rate_limited` / `connection_cap` + close `4429` | after `retry_after_ms` |
 | Provider 429 | HTTP 429 / SSE error | retry with backoff → model fallback → `rate_limited` | user retries |
 | Provider 5xx / transport | status/exception | same as 429, then `provider_unavailable` | user retries |
 | Provider dies mid-stream | exception after first token | **no retry**, terminal `error` | user retries |
@@ -26,8 +27,11 @@ degradation instead of hiding it.
 | Embedding width changed | recorded render params | rebuild owning migration via `.down.sql`, bump KB version; journal untouched | automatic |
 | Postgres lost mid-run | query exception | dense degrades to BM25; journal writes retry, then count as failed | reconnect |
 | Redis down | probe timeout | in-process cache/bus; resume reads the journal | automatic |
-| Journal queue full | `QueueFull` on enqueue | drop the write, count it (`journal.dropped`); stream never blocks | next turn |
-| Turn journal write fails | exception from the drain worker | retry once, then count (`journal.failed`); worker keeps draining | next turn |
+| Journal queue full | `QueueFull` on enqueue | checkpoints drop (`journal.dropped`); terminal turns spool to disk | replay loop |
+| Turn journal write fails | exception from the drain worker | retry once; terminal turns spool, then replay | replay loop |
+| Hard crash mid-turn | stale `streaming` row on read | partial answer restored, marked `interrupted` | automatic |
+| Spool full / unwritable | `session_journal_spool_full` / `_errors` | terminal write is lost and counted; stream unaffected | operator frees disk |
+| Metrics across replicas | per-instance snapshots in cache | merged counters/gauges; sampled histogram percentiles | next publish |
 | KB ingest during session | version bump | new cache key + bus invalidation | next turn |
 | Slow client / full queue | `QueueFull` | drop **frames**, keep text | automatic |
 | Wedged socket | 5 s send timeout | close connection | client reconnects |
@@ -95,13 +99,22 @@ Symptom: the stream stops, the socket closes with `1006`, and the turn never rec
 
 Behavior: the client marks the turn not-streaming only when a terminal frame arrives; on
 close it schedules a reconnect. After `ready`, if the server still has the session (Redis
-mirror), it sends `history`, which **replaces** the local transcript. The interrupted
-answer may be partially present in history only if the server appended it; a cancelled or
-crashed turn is not appended. The user sees the conversation restored and can resend.
+mirror) it sends `history`, which **replaces** the local transcript. With Postgres available,
+the partial answer is there: a streaming turn is checkpointed every
+`turn_checkpoint_interval_ms` (250 ms), so a hard crash loses at most one interval of text.
+History replay flags that turn with `interrupted: true`, and the client can render it as a
+partial answer instead of pretending it finished.
 
-Tradeoff: resume replays history, not in-flight token buffers. Resuming a partially
-streamed turn would require server-side turn journals and client-side dedupe; the
-complexity is not worth it for a chat turn.
+Recovery of the row is lazy, on the read path: `load_session` marks a `streaming` row older
+than `turn_checkpoint_stale_s` (60 s) as `aborted` / `interrupted` before replaying it. A
+fresh `streaming` row is left alone in case another replica is still producing it, so no
+separate janitor is required.
+
+Tradeoff: checkpoints are droppable and terminal writes are not. A checkpoint is
+reconstructible from the next one, so under queue pressure it is shed; a terminal turn is the
+transcript, so it spools to local disk rather than disappearing. What resume still does not
+replay is the in-flight token buffer: the client gets the last checkpointed prefix, not the
+exact frame boundary.
 
 ## Provider failures
 
@@ -246,21 +259,30 @@ through `retrieval_dense_failures` and the `degraded` field on `retrieval` frame
 queue drained by one worker. That split is the whole design: Redis is the fast path, Postgres
 is the record, and the token path never awaits durability.
 
-- **Queue full.** Enqueue is `put_nowait`; a full queue drops the job and increments
-  `journal.dropped`. The turn still completes and the stream is unaffected. A dropped write
-  costs a transcript line, not a response.
-- **Write fails.** The worker retries once with a short backoff, then increments
-  `journal.failed` and moves on. One bad write never kills the worker.
+- **Checkpoints.** A streaming turn is enqueued every `turn_checkpoint_interval_ms` (250 ms)
+  with `status = "streaming"`. Checkpoints are best-effort: when the queue is full they are
+  dropped and counted (`turn_checkpoints_dropped`), because the next checkpoint carries the
+  whole answer so far. A hard crash loses at most one interval.
+- **Terminal turns.** `done`, `aborted` and `error` writes are the transcript. When the queue
+  is full, or the worker's write fails after its retry, a terminal record is appended to a
+  local NDJSON spool instead of being dropped. The spool is replayed by a background task
+  every `session_journal_spool_retry_s` (30 s) and once more during graceful shutdown.
+- **The spool is bounded.** `session_journal_spool_max_bytes` (8 MB) caps it; when full,
+  `session_journal_spool_full` increments and the terminal write is lost. That is the honest
+  limit: local disk is a buffer, not a second database, and it does not survive losing the
+  container filesystem.
 - **A turn lands before its session row.** Under backpressure the session upsert can be
   dropped while the turn write survives. The turn write first does
   `INSERT INTO sessions (id) VALUES ($1) ON CONFLICT DO NOTHING` so the foreign key never
   rejects a transcript line.
-- **Graceful shutdown** drains for `session_journal_drain_s` (3 s) before cancelling the
-  worker. A hard kill loses at most the queue — that is the accepted cost of write-behind.
+- **Graceful shutdown** drains for `session_journal_drain_s` (3 s), then gives the spool one
+  bounded replay attempt before cancelling both tasks. A hard kill loses at most the queue
+  and whatever the spool had not yet flushed.
 
-Health exposes `journal: {backend, queued, written, dropped, failed}`. With no Postgres the
-journal is absent (`backend = "none"`) and sessions are mirror-only; resume then depends on
-Redis still holding the key.
+Health exposes
+`journal: {backend, queued, written, dropped, failed, spool: {enabled, path, spooled, replayed, errors}}`.
+With no Postgres the journal is absent (`backend = "none"`) and sessions are mirror-only;
+resume then depends on Redis still holding the key.
 
 ### Redis unavailable
 
@@ -272,6 +294,62 @@ Cache and bus both fall back to in-process implementations. Consequences:
 - Cross-replica `kb.invalidate` and `turn.abort` no longer reach other replicas.
 
 Health and `/api/metrics` report `backends.cache = "memory"` and `backends.bus = "memory"`.
+
+## Connection limits
+
+Two limits run before a socket is admitted (`app/ws/limits.py`):
+
+1. **Per-client attempt rate.** A fixed-window counter keyed by
+   `cuepilot:ratelimit:connect:{identity}:{bucket}` caps opens at
+   `rate_limit_connect_attempts` (30) per `rate_limit_window_s` (60 s). With Redis the
+   counter is cross-replica; with the in-process cache it is per-replica, and
+   `limits.backend` in health says which.
+2. **Per-replica connection cap.** `rate_limit_max_connections` (200) bounds this process's
+   sockets and turn tasks. It is local on purpose: `ws_active` is a process gauge.
+
+The cap check and the gauge increment are separated by an `await`, so the limiter takes a
+**synchronous reservation** before its first await and releases it once the socket is
+accepted. Without that, two simultaneous opens could both pass a check against the same
+count.
+
+A rejected client receives an `error` frame (`client_rate_limited` or `connection_cap`,
+`retryable: true`, `retry_after_ms`) and the socket closes with `4429`, so it can back off
+instead of reconnect-looping.
+
+The limiter **fails open** if the cache raises: it logs, increments
+`rate_limit_cache_errors`, and admits the connection. A broken limiter must not take the
+gateway down. The failure is visible in metrics and in the health `limits` block.
+
+Residual caveats: a fixed window admits a burst at a boundary (up to 2× the rate across two
+adjacent windows), and identity is the socket peer unless
+`rate_limit_trust_forwarded_for=true` is set behind a trusted proxy — clients behind one NAT
+share a bucket.
+
+## Cross-replica metrics
+
+`/api/metrics` used to report whichever worker answered the request. Now each replica
+publishes a snapshot to `cuepilot:metrics:{instance_id}` every
+`metrics_publish_interval_s` (10 s) with a `metrics_publish_ttl_s` (30 s) TTL, and the
+endpoint merges every live snapshot (`app/telemetry/aggregate.py`):
+
+- **Counters are summed.** A replica restart resets its own counters, so a merged total can
+  move backwards. `aggregation.instances` and `aggregation.instance_ids` say what was
+  visible.
+- **Gauges are summed.** Every gauge published today is additive (`ws_active`); a
+  non-additive gauge would need an explicit rule.
+- **Histogram percentiles are approximate.** Each worker publishes at most
+  `metrics_sample_limit` (512) recent observations per histogram. Percentiles are recomputed
+  from those samples; `count` is the true sum. Any histogram where a worker observed more
+  than it published is listed in `aggregation.approximate_histograms`.
+- If the cache cannot be read, the endpoint still returns local metrics and adds
+  `aggregation.error`; it does not fail the request.
+- A graceful shutdown deletes its own snapshot so a restart does not linger as a phantom
+  second instance for the rest of the TTL.
+
+The response always includes `aggregation: {backend, instances, instance_ids, merged,
+approximate_histograms, sample_limit, note}` so a caller can tell a single-process answer
+from a fleet answer.
+
 
 ## Backpressure and slow clients
 
@@ -332,11 +410,18 @@ applied when the tab is visible again; it is not dropped.
 
 ## Known gaps
 
-- No per-client rate limiting; one client can open many sockets.
-- The journal is written on `done` and `abort`, so a **hard** crash mid-turn still loses the
-  partial answer; only completed and aborted turns are durable. Journal writes can also be
-  dropped under backpressure (`journal.dropped`), which costs a transcript line by design.
-- Metrics are per worker; no aggregation across replicas.
+- **Rate limiting is coarse.** Fixed windows, socket-peer identity by default, and a
+  per-replica connection cap. A client behind a shared NAT shares a bucket, and a fixed
+  window allows a boundary burst. Per-token or per-turn budgets are not implemented.
+- **Durability is bounded, not guaranteed.** Checkpoints lose at most one interval on a hard
+  crash, terminal writes spool to **local** disk, and the spool is capped at 8 MB. Losing
+  the container filesystem loses the spool; a long Postgres outage can fill it and drop the
+  tail (`session_journal_spool_full`).
+- **Merged percentiles are approximate.** They are recomputed from at most
+  `metrics_sample_limit` samples per worker, and counters reset when a worker restarts.
+  Exact fleet-wide quantiles would need a real metrics backend.
+- **A dropped checkpoint is invisible to the client.** The turn resumes from the last
+  checkpoint, which is usually within 250 ms but is not a frame-exact replay.
 - System audio is macOS and Windows only, and on macOS it needs Screen Recording
   permission; a denied permission surfaces as a reason in the UI, not as silence. Linux
   depends on the sound server and is not claimed.

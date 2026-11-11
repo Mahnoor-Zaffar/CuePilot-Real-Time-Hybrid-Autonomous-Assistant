@@ -20,4 +20,7 @@ desktop/release/
 
 # benchmark data (downloaded, regenerable)
 server/bench/data/
+# journal spool (local durability buffer, regenerable)
+data/
+server/data/
 .DS_Store

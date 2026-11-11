@@ -84,6 +84,9 @@ class Session:
     client: dict[str, Any] = field(default_factory=dict)
     audio: AudioBuffer = field(default_factory=AudioBuffer)
     active_turn: TurnHandle | None = None
+    # Set while a turn is streaming so a resume knows the Redis mirror may be
+    # behind the journal and reads Postgres instead. Cleared on the terminal path.
+    pending_turn: str | None = None
 
     def touch(self) -> None:
         self.updated_at = time.time()
@@ -98,6 +101,7 @@ class Session:
             "kb_version": self.kb_version,
             "turns": self.turns,
             "client": self.client,
+            "pending_turn": self.pending_turn,
         }
 
     @classmethod
@@ -111,6 +115,7 @@ class Session:
             kb_version=int(record.get("kb_version", 1)),
             turns=int(record.get("turns", 0)),
             client=dict(record.get("client") or {}),
+            pending_turn=record.get("pending_turn"),
         )
 
 
@@ -181,13 +186,29 @@ class SessionManager:
         return session
 
     async def _load_record(self, session_id: str) -> dict[str, Any] | None:
-        """Redis first (hot mirror), then the journal (the record)."""
+        """Redis first (hot mirror), then the journal (the record).
+
+        A mirror with `pending_turn` was written while a turn was streaming, so
+        it may be behind the checkpointed journal. In that one case the journal
+        is authoritative and is read even though Redis has a hit.
+        """
         raw = await self.cache.get(self._key(session_id))
         if raw:
             try:
-                return json.loads(raw)
+                record = json.loads(raw)
             except json.JSONDecodeError:
                 logger.warning("corrupt session mirror for %s, trying the journal", session_id)
+                record = None
+            if isinstance(record, dict):
+                if record.get("pending_turn") and self.journal is not None:
+                    recovered = await self._load_journal(session_id)
+                    if recovered is not None:
+                        logger.info("session %s recovered from the journal (in-flight turn)", session_id)
+                        return recovered
+                return record
+        return await self._load_journal(session_id)
+
+    async def _load_journal(self, session_id: str) -> dict[str, Any] | None:
         if self.journal is None:
             return None
         try:
@@ -225,13 +246,29 @@ class SessionManager:
         """Enqueue one finished turn. Returns False if there is nowhere durable to put it.
 
         Called from the turn's terminal path, so it must not await: a slow
-        journal may cost a transcript line, never the stream.
+        journal may cost a transcript line, never the stream. Terminal turns
+        spool rather than drop when the journal queue is full.
         """
         if self.journal is None:
             return False
         from app.ws.journal import TurnRecord
 
         return self.journal.record_turn(TurnRecord(session_id=session.id, **fields))
+
+    def checkpoint_turn(self, session: Session, **fields: Any) -> bool:
+        """Best-effort partial-turn checkpoint while tokens are streaming.
+
+        Unlike `record_turn`, this is explicitly droppable: the next checkpoint
+        carries the whole answer so far, so a dropped one costs at most one
+        interval of crash protection, never the stream.
+        """
+        if self.journal is None:
+            return False
+        from app.ws.journal import TurnRecord
+
+        return self.journal.record_turn(
+            TurnRecord(session_id=session.id, status="streaming", **fields)
+        )
 
     async def drop(self, session_id: str) -> None:
         async with self._lock:

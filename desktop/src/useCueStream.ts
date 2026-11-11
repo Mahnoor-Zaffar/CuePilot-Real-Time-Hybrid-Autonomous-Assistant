@@ -80,6 +80,8 @@ export interface ChatMessage {
   metrics?: TurnMetrics;
   error?: { code: string; message: string; retryable: boolean };
   aborted?: boolean;
+  /** recovered from a streaming checkpoint after a crash; text may be partial */
+  interrupted?: boolean;
   /** wall-clock prompt -> first painted delta, measured in the renderer */
   clientTtftMs?: number;
   /** server-side prompt -> first delta handed to the writer */
@@ -332,6 +334,7 @@ export function useCueStream() {
                   role: item.role as "user" | "assistant",
                   text: String(item.content ?? ""),
                   createdAt: now + index,
+                  interrupted: item.interrupted === true,
                 }))
             : [];
           if (restored.length) setMessages(restored);

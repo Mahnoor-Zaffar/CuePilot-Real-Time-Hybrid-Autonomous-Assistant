@@ -14,6 +14,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from app.llm.agent import TurnRequest
 from app.ws import protocol
 from app.ws.audio import AudioIngest
+from app.ws.limits import CLOSE_RATE_LIMITED, client_identity
 from app.ws.outbound import ConnectionClosed, OutboundStream
 from app.ws.protocol import (
     AbortFrame,
@@ -50,12 +51,22 @@ class Connection:
         self._turn_tasks: set[asyncio.Task] = set()
         self._heartbeat: asyncio.Task | None = None
         self._closing = False
+        self._counted = False
 
     # ── entrypoint ─────────────────────────────────────────────────────────
     async def run(self) -> None:
-        await self.ws.accept()
+        try:
+            await self.ws.accept()
+        except Exception:
+            # The limiter reserved a slot in `admit`; accepting failed, so give
+            # it back rather than leaking capacity on a dead socket.
+            self.runtime.limiter.release_reservation()
+            raise
         self.metrics.incr("ws_connections_total")
         self.metrics.gauge("ws_active", self.metrics.gauges.get("ws_active", 0) + 1)
+        self._counted = True
+        # The gauge now represents this connection; the reservation is spent.
+        self.runtime.limiter.release_reservation()
         await self.outbound.start()
         self.audio = AudioIngest(self.settings, self.metrics, self.recorder, self.outbound.send)
 
@@ -176,6 +187,13 @@ class Connection:
             await self._abort_active("superseded")
         handle = TurnHandle(turn_id=frame.id)
         self.session.active_turn = handle
+        # Mark the mirror before the first token so a resume after a hard crash
+        # knows to read the checkpointed journal instead of trusting Redis. The
+        # prompt itself lands in the journal with the first checkpoint.
+        if self.runtime.sessions.journal is not None:
+            self.session.pending_turn = frame.id
+            with contextlib.suppress(Exception):
+                await self.runtime.sessions.save(self.session)
         await self.outbound.send(protocol.ack(frame.id))
         task = asyncio.create_task(self._run_turn(frame, handle), name=f"turn-{frame.id}")
         handle.task = task
@@ -198,11 +216,26 @@ class Connection:
         answer: list[str] = []
         done: dict[str, Any] = {}
         status = "error"
+        checkpoint_interval = self.settings.turn_checkpoint_interval_ms / 1000
+        last_checkpoint = 0.0
         try:
             async for out in self.runtime.agent.run(request, session):
                 if out.get("type") == "delta":
                     answer.append(out["text"])
                     await self.outbound.push_delta(handle.turn_id, out["text"])
+                    if checkpoint_interval > 0 and self.runtime.sessions.journal is not None:
+                        now = time.monotonic()
+                        if last_checkpoint == 0.0 or now - last_checkpoint >= checkpoint_interval:
+                            # Advance the clock even when the checkpoint is shed:
+                            # a full queue should not make us retry every token.
+                            last_checkpoint = now
+                            if not self.runtime.sessions.checkpoint_turn(
+                                session,
+                                turn_id=handle.turn_id,
+                                prompt=frame.text,
+                                answer="".join(answer),
+                            ):
+                                self.metrics.incr("turn_checkpoints_dropped")
                 else:
                     if out.get("type") == "done":
                         done = out
@@ -237,6 +270,9 @@ class Connection:
                 session.active_turn = None
             session.turns += 1
             session.kb_version = self.runtime.retriever.kb_version
+            # The turn is no longer in flight; clear the marker so the next
+            # resume trusts the mirror instead of re-reading the journal.
+            session.pending_turn = None
             # The journal write is a queue push, not an await on Postgres: the
             # turn is already finished, and durability must not delay the next one.
             self.runtime.sessions.record_turn(
@@ -334,7 +370,8 @@ class Connection:
             with contextlib.suppress(Exception):
                 await self.runtime.sessions.save(self.session)
         await self.outbound.close()
-        self.metrics.gauge("ws_active", max(0, self.metrics.gauges.get("ws_active", 1) - 1))
+        if self._counted:
+            self.metrics.gauge("ws_active", max(0, self.metrics.gauges.get("ws_active", 1) - 1))
         with contextlib.suppress(Exception):
             await self.ws.close()
 
@@ -355,6 +392,23 @@ async def handle_connection(websocket: WebSocket, runtime: Runtime) -> None:
         )
         await websocket.close(code=CLOSE_UNAUTHORIZED)
         return
+
+    decision = await runtime.limiter.admit(client_identity(websocket, runtime.settings))
+    if not decision.allowed:
+        await websocket.accept()
+        await websocket.send_json(
+            protocol.error(
+                decision.message or "too many connections",
+                code=decision.code or "client_rate_limited",
+                retryable=True,
+                retry_after_ms=decision.retry_after_ms,
+            )
+        )
+        runtime.metrics.incr("ws_connections_rejected")
+        with contextlib.suppress(Exception):
+            await websocket.close(code=CLOSE_RATE_LIMITED)
+        return
+
     connection = Connection(websocket, runtime)
     started = time.perf_counter()
     try:
