@@ -475,32 +475,19 @@ rule is a deliberate simplification.
 
 ## Limitations
 
-**Not built yet** — the next slices:
+The transport, retrieval, tool loop, cancellation, reconnect/resume, durable journal, and
+audio capture are real. The rest is scoped on purpose:
 
-- The desktop app is a **client skeleton** by design: one screen, no settings, no onboarding.
-  The shell, streaming transport, microphone capture, and system-audio loopback are real.
-  Packaging ships DMGs that are unsigned by default; notarization activates automatically
-  when `CSC_LINK` (or a keychain identity) and Apple credentials are present in the
-  release environment, and stays inert otherwise.
-- **System audio is macOS and Windows only.** On macOS it needs Screen Recording
-  permission (System Settings → Privacy & Security → Screen Recording), and this build
-  pins Electron 33, so it relies on two Chromium feature flags to reach the loopback path.
-  The capability IPC reports a denied permission with a reason instead of failing silently.
-  Linux depends on the sound server and is not claimed.
-- The benchmark corpus is synthetic. The bootstrap intervals say how much of a difference
-  this label set can resolve; they say nothing about your domain. An external reference
-  point is available via `make beir` (opt-in: downloads a BEIR subset, writes
-  `docs/METRICS.beir.md`); the headline numbers in `docs/METRICS.md` remain the
-  synthetic-corpus ones.
+| Limit | What that means |
+|---|---|
+| **Client is a skeleton** | One screen, no settings, onboarding, or session browser. DMGs are unsigned unless Apple credentials are configured. |
+| **System audio: macOS + Windows** | macOS needs Screen Recording; Electron 33 needs two Chromium flags. A denial is surfaced with a reason. Linux is not claimed. |
+| **Synthetic evaluation corpus** | Intervals measure label noise on 100 hand-built queries, not your domain. `make beir` adds an external scifact reference; it is not the headline. |
+| **Two intentional doubles** | `MockProvider` (deterministic, offline) and `HashEmbedder` (lexical proxy, zero-dep default). The real semantic paths (`model2vec`, hosted embeddings) run in CI. |
 
-**Test doubles, kept on purpose:**
-
-- `MockProvider` is a deterministic double. It exists so the suite and the offline demo are
-  reproducible; it is not a model. The semantic path itself is real:
-  `CUEPILOT_EMBEDDING_PROVIDER=local` runs `model2vec` in the gateway, and `HttpEmbedder`
-  runs hosted embeddings when a key is set. Both are exercised in CI.
-- The hash embedder remains the zero-dependency default. It is a lexical proxy, labelled as
-  such everywhere, and never presented as a semantic encoder.
+Operational gaps — no per-client rate limiting, partial turns lost on a hard crash,
+droppable journal writes, per-worker metrics — are in
+[docs/FAILURE_MODES.md](docs/FAILURE_MODES.md#known-gaps).
 
 ---
 
