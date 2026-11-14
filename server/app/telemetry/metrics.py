@@ -145,8 +145,9 @@ class Histogram:
 class Metrics:
     """Single-process metric registry.
 
-    Each replica publishes a bucket snapshot; `/api/metrics` merges the live
-    snapshots (see `telemetry/aggregate.py`) instead of reporting one worker.
+    Every replica reports its own snapshot. `/metrics` renders this process for
+    Prometheus to scrape and aggregate; `/api/metrics` returns the same snapshot
+    as JSON. The gateway deliberately does not merge snapshots in-process.
     """
 
     def __init__(self) -> None:

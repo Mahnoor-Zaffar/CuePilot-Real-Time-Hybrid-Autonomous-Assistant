@@ -5,8 +5,11 @@ discriminator. The server validates client frames with Pydantic and answers malf
 with an `error` frame rather than closing silently.
 
 - **Version:** `1`. `hello.protocol_version` must match; a mismatch closes with `4400`.
-- **Auth (optional):** if `CUEPILOT_API_TOKEN` is set, connect with `?token=<token>`.
-  A missing/wrong token gets an `error` frame and close code `4401`.
+- **Auth (optional):** two modes. With `CUEPILOT_API_TOKEN` set, connect with
+  `?token=<token>`. With `CUEPILOT_AUTH_JWT_SECRET` set, JWT takes precedence: pass a
+  bearer token as `?token=<jwt>` or an `Authorization: Bearer <jwt>` header. Only
+  HS256/HS384/HS512 are accepted, and the configured claim (`sub` by default) becomes the
+  rate-limit identity. A missing/wrong token gets an `error` frame and close code `4401`.
 - **Size limit:** frames above `ws_max_message_bytes` (2 MB) are rejected by the server.
 - **Transport:** ordered and reliable while open. Reconnect is the client's job.
 
@@ -123,13 +126,19 @@ Only after a resumed handshake, before any turn frames. Replaces the client's tr
 {
   "type": "history",
   "messages": [
-    { "role": "user", "content": "…" },
-    { "role": "assistant", "content": "…" }
+    { "role": "user", "content": "…", "turn_id": "t8" },
+    { "role": "assistant", "content": "…", "turn_id": "t8" }
   ]
 }
 ```
 
-At most the last 20 messages. Roles are only `user` and `assistant`.
+At most the last 20 messages. Roles are only `user` and `assistant`. Every message carries
+its stable `turn_id`; the user message uses `<turn_id>:user` as its client id and the
+assistant message uses the `turn_id` itself. A reconnect can race a turn in both directions,
+so clients should **reconcile by `turn_id` rather than replace the transcript wholesale**:
+match local messages to replayed ones, keep the longer text, preserve locally-known sources,
+tool views, and metrics, and keep locally-started messages the replay does not know about.
+New deltas clear the `interrupted` marker on a reconciled message.
 
 A turn restored from a streaming checkpoint is flagged rather than presented as finished:
 
@@ -266,9 +275,12 @@ immediately. Text is ordered and lossless under normal backpressure.
 }
 ```
 
-`finish_reason` is the provider's value, or `tool_iterations_exhausted`, or `error`.
-`ttft_ms` is measured server-side from prompt decode to the first delta handed to the
-socket writer; it is `null` if the provider produced no text.
+`finish_reason` is the provider's value, or `tool_iterations_exhausted`, `token_budget`
+(the per-session token budget cut the stream mid-answer), or `error`. `ttft_ms` is measured
+server-side from prompt decode to the first delta handed to the socket writer; it is `null`
+if the provider produced no text. When a turn is cut off at `token_budget`, the provider may
+not report usage for the closed stream, so `usage` is filled from the same `chars / 4`
+estimate used for the cutoff.
 
 ### `aborted`
 
@@ -308,7 +320,7 @@ Error codes:
 | `client_rate_limited` | connection | Too many connection opens for this client in the window; socket closes with 4429. | yes |
 | `connection_cap` | connection | This replica is at its concurrent-socket cap; socket closes with 4429. | yes |
 | `session_turn_budget` | turn | This session used its per-window turn budget. | yes |
-| `session_token_budget` | turn | This session used its per-window token budget. | yes |
+| `session_token_budget` | turn | Admission: this session used its per-window token budget (retryable). Mid-stream: the remaining budget capped the answer and the stream was truncated (not retryable). | admission yes / cutoff no |
 | `journal_unavailable` | turn | Transcript durability is degraded; the journal is recovering. | yes |
 | `rate_limited` | turn | Provider 429 after retries/fallback. | yes |
 | `provider_unavailable` | turn | Provider 5xx/transport failure. | yes |
@@ -389,7 +401,9 @@ delay = max(250 ms, random() * min(8000, 250 * 2^attempt))
 
 up to 8 attempts. The session id is persisted in `localStorage` under
 `cuepilot.session_id`, so a reconnect resumes the conversation instead of starting over.
-A successful `ready` resets the attempt counter.
+A successful `ready` resets the attempt counter. A resumed `history` is reconciled into the
+local transcript by `turn_id` (see [`history`](#history)), not applied as a wholesale
+replacement, so a turn that both sides partly saw is neither duplicated nor truncated.
 
 ## Close codes
 
@@ -398,7 +412,7 @@ A successful `ready` resets the attempt counter.
 | `1000` | Normal close (client shutdown / new session). |
 | `1006` | Abnormal close (network, process death) — client reconnects. |
 | `4400` | Protocol error: bad first frame, invalid JSON, version mismatch. |
-| `4401` | Unauthorized: missing/wrong `?token=`. |
+| `4401` | Unauthorized: missing/invalid `?token=` or bearer JWT. |
 | `4408` | Stale: no client frame for 2.5× the heartbeat interval. |
 | `4429` | Rate limited: too many opens in the window, or this replica is at its connection cap. |
 

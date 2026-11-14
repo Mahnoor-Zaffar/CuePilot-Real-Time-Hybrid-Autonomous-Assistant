@@ -71,7 +71,7 @@ def test_discover_requires_the_directory() -> None:
 
 def test_the_shipped_migrations_are_discoverable() -> None:
     migrations = discover()
-    assert [m.version for m in migrations] == ["001", "002", "003"]
+    assert [m.version for m in migrations] == ["001", "002", "003", "004"]
     first = migrations[0]
     assert first.down_path is not None
     assert "{{embedding_dim}}" in first.template
@@ -86,6 +86,12 @@ def test_the_shipped_migrations_are_discoverable() -> None:
     assert checkpoints.parameters == set()
     assert checkpoints.requires == ("002",)
     assert checkpoints.down_path is not None
+    # 004 is the durable turn outbox: it references the journal's session ids
+    # but owns no parameters, so a width change must not rebuild it.
+    outbox = migrations[3]
+    assert outbox.parameters == set()
+    assert outbox.requires == ("002",)
+    assert outbox.down_path is not None
 
 
 def test_discover_parses_requires_headers(tmp_path: Path) -> None:
@@ -270,6 +276,7 @@ async def _column_type(pool) -> str:
 
 async def _reset(pool) -> None:
     await pool.execute(
+        "DROP TABLE IF EXISTS turn_outbox; "
         "DROP TABLE IF EXISTS turns; "
         "DROP TABLE IF EXISTS sessions; "
         "DROP TABLE IF EXISTS kb_chunks; "
@@ -288,12 +295,12 @@ async def test_migrations_apply_then_rebuild_on_dimension_change() -> None:
         await _reset(pool)
 
         first = await run_migrations(pool, params={"embedding_dim": 1536})
-        assert first.applied == ["001", "002", "003"]
+        assert first.applied == ["001", "002", "003", "004"]
         assert await _column_type(pool) == "vector(1536)"
 
         again = await run_migrations(pool, params={"embedding_dim": 1536})
         assert not again.changed
-        assert again.up_to_date == ["001", "002", "003"]
+        assert again.up_to_date == ["001", "002", "003", "004"]
 
         # The journal is the only copy of a transcript, so prove a width change
         # does not rebuild it.
@@ -350,7 +357,7 @@ async def test_a_table_created_outside_the_runner_is_repaired() -> None:
 
         result = await run_migrations(pool, params={"embedding_dim": 256})
 
-        assert result.applied == ["001", "002", "003"]
+        assert result.applied == ["001", "002", "003", "004"]
         assert result.rebuilt == ["001"]
         assert await _column_type(pool) == "vector(256)"
     finally:
@@ -371,8 +378,8 @@ async def test_concurrent_boots_apply_a_migration_once() -> None:
             run_migrations(pool, params={"embedding_dim": 1536}),
         )
         applied = [version for result in results for version in result.applied]
-        assert applied == ["001", "002", "003"]
-        assert await pool.fetchval("SELECT count(*) FROM schema_migrations") == 3
+        assert applied == ["001", "002", "003", "004"]
+        assert await pool.fetchval("SELECT count(*) FROM schema_migrations") == 4
     finally:
         await _reset(pool)
         await pool.close()

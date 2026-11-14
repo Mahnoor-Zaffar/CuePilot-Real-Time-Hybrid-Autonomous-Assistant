@@ -32,12 +32,39 @@ class FakeConnection:
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
         self.row: dict[str, Any] | None = None
         self.turns: list[dict[str, Any]] = []
+        self.outbox: list[dict[str, Any]] = []
         self.fail = False
+        # Separate switch so a test can exercise the cache tier without also
+        # breaking the replay write path.
+        self.outbox_fail = False
 
     async def execute(self, sql: str, *args: Any) -> None:
+        verb = sql.split()[0].upper()
+        if "turn_outbox" in sql:
+            if self.outbox_fail:
+                raise ConnectionError("outbox unavailable")
+            if verb == "INSERT":
+                session_id, turn_id, payload = args
+                self.outbox = [
+                    row
+                    for row in self.outbox
+                    if not (row["session_id"] == session_id and row["turn_id"] == turn_id)
+                ]
+                self.outbox.append(
+                    {"session_id": session_id, "turn_id": turn_id, "payload": payload}
+                )
+            elif verb == "DELETE":
+                session_id, turn_id = args
+                self.outbox = [
+                    row
+                    for row in self.outbox
+                    if not (row["session_id"] == session_id and row["turn_id"] == turn_id)
+                ]
+            self.executed.append((verb, args))
+            return
         if self.fail:
             raise ConnectionError("postgres went away")
-        self.executed.append((sql.split()[0].upper(), args))
+        self.executed.append((verb, args))
 
     def transaction(self) -> _NullTransaction:
         return _NullTransaction()
@@ -46,6 +73,11 @@ class FakeConnection:
         return self.row
 
     async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
+        if "turn_outbox" in sql:
+            if self.outbox_fail:
+                raise ConnectionError("outbox unavailable")
+            limit = int(args[0]) if args else 100
+            return self.outbox[:limit]
         return self.turns
 
 
@@ -214,10 +246,33 @@ async def test_a_failed_terminal_write_is_spooled_for_later(tmp_path: Path) -> N
     assert journal._spool.spooled >= 1
 
 
+async def test_a_terminal_turn_falls_back_to_the_durable_outbox() -> None:
+    # No local spool path and no cache: the Postgres outbox is the last
+    # durable tier before the transcript is dropped.
+    journal, pool = make_journal(session_journal_queue=1)
+
+    assert journal.submit(turn(turn_id="t1")) is True
+    assert await journal.record_terminal(turn(turn_id="t2")) is True
+
+    assert journal.outboxed == 1
+    assert journal.dropped == 0
+    assert journal.stats()["durability"]["outbox"]["spooled"] == 1
+    assert [row["turn_id"] for row in pool.conn.outbox] == ["t2"]
+
+    written = await journal.replay_spool()
+
+    assert written == 1
+    assert journal.outbox_replayed == 1
+    assert pool.conn.outbox == []
+    assert journal.stats()["durability"]["outbox"]["replayed"] == 1
+
+
 async def test_a_terminal_turn_falls_back_to_the_shared_cache() -> None:
     cache = MemoryCache()
-    # The default test settings disable the local spool path.
+    # The default test settings disable the local spool path. Break the outbox
+    # so the cache tier is the one under test.
     journal, pool = make_journal_with_cache(cache, session_journal_queue=1)
+    pool.conn.outbox_fail = True
 
     assert journal.submit(turn(turn_id="t1")) is True
     assert await journal.record_terminal(turn(turn_id="t2")) is True
@@ -227,6 +282,8 @@ async def test_a_terminal_turn_falls_back_to_the_shared_cache() -> None:
     keys = await cache.scan("cuepilot:spool:turn:")
     assert len(keys) == 1
 
+    # Restore the outbox so the replay path can reach the cache tier.
+    pool.conn.outbox_fail = False
     written = await journal.replay_spool()
 
     assert written == 1
@@ -236,8 +293,10 @@ async def test_a_terminal_turn_falls_back_to_the_shared_cache() -> None:
 
 
 async def test_durability_degrades_when_no_spool_is_available() -> None:
-    # No local spool path and no cache: there is nowhere to put the transcript.
-    journal, _ = make_journal(session_journal_queue=1)
+    # No local spool path, no cache, and the outbox is down: there is nowhere
+    # to put the transcript.
+    journal, pool = make_journal(session_journal_queue=1)
+    pool.conn.outbox_fail = True
 
     assert journal.submit(turn(turn_id="t1")) is True
     assert await journal.record_terminal(turn(turn_id="t2")) is False
@@ -325,6 +384,7 @@ async def test_load_session_marks_a_partial_turn_as_interrupted() -> None:
         {
             "role": "user",
             "content": "explain the retry policy",
+            "turn_id": "t1",
             "interrupted": True,
         },
         {

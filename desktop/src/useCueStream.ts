@@ -145,6 +145,40 @@ const INITIAL_AUDIO: AudioState = {
   transcripts: [],
 };
 
+/**
+ * Merge a server `history` replay into the local transcript.
+ *
+ * A reconnect can race a turn in both directions: the server checkpoint may be
+ * behind text this client already painted, or ahead of a turn the client never
+ * saw. Messages are matched by stable `turn_id`, and the longer text wins.
+ * Sources, tool views and metrics only exist locally, so they are preserved.
+ */
+function reconcileHistory(local: ChatMessage[], restored: ChatMessage[]): ChatMessage[] {
+  const localById = new Map(local.map((message) => [message.id, message]));
+  const merged: ChatMessage[] = [];
+  for (const item of restored) {
+    const existing = localById.get(item.id);
+    if (!existing) {
+      merged.push(item);
+      continue;
+    }
+    localById.delete(item.id);
+    const restoredIsLonger = item.text.length > existing.text.length;
+    merged.push({
+      ...existing,
+      text: restoredIsLonger ? item.text : existing.text,
+      interrupted: restoredIsLonger ? item.interrupted : existing.interrupted,
+      checkpointedAt: item.checkpointedAt ?? existing.checkpointedAt,
+      // A turn the server already has a terminal copy of is not streaming.
+      streaming: restoredIsLonger ? false : existing.streaming,
+    });
+  }
+  // Locally-started messages the replay does not know about stay, including
+  // the turn currently streaming.
+  for (const leftover of localById.values()) merged.push(leftover);
+  return merged;
+}
+
 const PCM_WORKLET = `
 class PcmTap extends AudioWorkletProcessor {
   process(inputs) {
@@ -250,7 +284,11 @@ export function useCueStream() {
     setMessages((prev) =>
       prev.map((message) => {
         const addition = pending.get(message.id);
-        return addition ? { ...message, text: message.text + addition } : message;
+        // New text means the turn is live again: a checkpointed `interrupted`
+        // marker must not stick once deltas arrive.
+        return addition
+          ? { ...message, text: message.text + addition, interrupted: false, streaming: true }
+          : message;
       }),
     );
     publishStats();
@@ -331,19 +369,27 @@ export function useCueStream() {
           const restored: ChatMessage[] = Array.isArray(frame.messages)
             ? frame.messages
                 .filter((item: any) => item && (item.role === "user" || item.role === "assistant"))
-                .map((item: any, index: number) => ({
-                  id: `history-${now}-${index}`,
-                  role: item.role as "user" | "assistant",
-                  text: String(item.content ?? ""),
-                  createdAt: now + index,
-                  interrupted: item.interrupted === true,
-                  checkpointedAt:
-                    typeof item.checkpointed_at === "number"
-                      ? item.checkpointed_at * 1000
-                      : null,
-                }))
+                .map((item: any, index: number) => {
+                  const turnId = typeof item.turn_id === "string" ? item.turn_id : "";
+                  const id = !turnId
+                    ? `history-${now}-${index}`
+                    : item.role === "user"
+                      ? `${turnId}:user`
+                      : turnId;
+                  return {
+                    id,
+                    role: item.role as "user" | "assistant",
+                    text: String(item.content ?? ""),
+                    createdAt: now + index,
+                    interrupted: item.interrupted === true,
+                    checkpointedAt:
+                      typeof item.checkpointed_at === "number"
+                        ? item.checkpointed_at * 1000
+                        : null,
+                  };
+                })
             : [];
-          if (restored.length) setMessages(restored);
+          if (restored.length) setMessages((prev) => reconcileHistory(prev, restored));
           break;
         }
 

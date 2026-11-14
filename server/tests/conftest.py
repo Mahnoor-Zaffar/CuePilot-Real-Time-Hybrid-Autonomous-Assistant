@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -30,7 +35,6 @@ def make_settings(**overrides: Any) -> Settings:
         # Tests must not leave spool files behind; spool tests opt in with a
         # tmp_path-backed path.
         "session_journal_spool_path": "",
-        "metrics_publish_interval_s": 3600.0,
     }
     base.update(overrides)
     return Settings(**base)
@@ -51,6 +55,27 @@ def client(settings: Settings) -> Iterator[TestClient]:
 @pytest.fixture()
 def runtime(client: TestClient):
     return client.app.state.runtime
+
+
+def make_jwt(
+    claims: dict[str, Any],
+    *,
+    secret: str = "test-secret",
+    alg: str = "HS256",
+    expires_in: int = 300,
+) -> str:
+    """Mint an HS* JWT for auth tests. Mirrors what an identity proxy issues."""
+    header = {"alg": alg, "typ": "JWT"}
+    payload = {"exp": int(time.time()) + expires_in, **claims}
+
+    def encode(value: dict[str, Any]) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    signing_input = f"{encode(header)}.{encode(payload)}"
+    digest = {"HS256": hashlib.sha256, "HS384": hashlib.sha384, "HS512": hashlib.sha512}[alg]
+    signature = hmac.new(secret.encode(), signing_input.encode(), digest).digest()
+    return f"{signing_input}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
 
 
 def drain_ws(ws, *, until: str = "done", limit: int = 400) -> list[dict]:
@@ -126,6 +151,7 @@ __all__ = [
     "ScriptedProvider",
     "client",
     "drain_ws",
+    "make_jwt",
     "make_settings",
     "runtime",
     "settings",

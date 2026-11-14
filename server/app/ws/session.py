@@ -70,6 +70,10 @@ class TurnHandle:
     turn_id: str
     started_at: float = field(default_factory=time.perf_counter)
     task: asyncio.Task | None = None
+    # Remaining per-session token budget at admission, or None when unlimited.
+    # The agent caps `max_tokens` to it and cuts the stream if estimated usage
+    # crosses it, so the budget bounds the turn instead of being post-hoc.
+    token_limit: int | None = None
 
 
 @dataclass

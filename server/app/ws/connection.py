@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.auth import AuthError, authenticate
 from app.llm.agent import TurnRequest
 from app.ws import protocol
 from app.ws.audio import AudioIngest
@@ -215,9 +216,13 @@ class Connection:
             )
             return
 
+        # The remaining token budget caps the provider's `max_tokens` and is
+        # enforced again mid-stream, so one long answer cannot blow through it.
+        token_limit = await self.runtime.budget.remaining(self.session.id)
+
         if self.session.active_turn is not None:
             await self._abort_active("superseded")
-        handle = TurnHandle(turn_id=frame.id)
+        handle = TurnHandle(turn_id=frame.id, token_limit=token_limit)
         self.session.active_turn = handle
         # Mark the mirror before the first token so a resume after a hard crash
         # knows to read the checkpointed journal instead of trusting Redis. The
@@ -244,6 +249,7 @@ class Connection:
             tools=frame.options.tools,
             temperature=frame.options.temperature,
             max_tokens=frame.options.max_tokens,
+            token_limit=handle.token_limit,
         )
         answer: list[str] = []
         done: dict[str, Any] = {}
@@ -424,24 +430,46 @@ class Connection:
             await self.ws.close()
 
 
-def authorized(websocket: WebSocket, runtime: Runtime) -> bool:
-    token = runtime.settings.api_token
-    if not token:
-        return True
-    supplied = websocket.query_params.get("token")
-    return supplied == token
+def socket_identity(websocket: WebSocket, runtime: Runtime) -> str | None:
+    """Authenticate the socket and return the JWT subject, if any.
+
+    Raises `AuthError` when authentication is configured and the token is
+    missing or invalid. Browsers cannot set headers on a WebSocket, so the same
+    JWT is also accepted as `?token=`. The query string can end up in access
+    logs; a short-lived token keeps that exposure bounded.
+    """
+    settings = runtime.settings
+    if settings.auth_jwt_secret:
+        header = websocket.headers.get("authorization")
+        if not header:
+            supplied = websocket.query_params.get("token")
+            header = f"Bearer {supplied}" if supplied else None
+        identity = authenticate(header, settings)
+        return identity.subject if identity is not None else None
+
+    token = settings.api_token
+    if token:
+        supplied = websocket.query_params.get("token")
+        if supplied != token:
+            raise AuthError("invalid or missing token")
+    return None
 
 
 async def handle_connection(websocket: WebSocket, runtime: Runtime) -> None:
-    if not authorized(websocket, runtime):
+    try:
+        jwt_subject = socket_identity(websocket, runtime)
+    except AuthError as exc:
         await websocket.accept()
         await websocket.send_json(
-            protocol.error("unauthorized", code="unauthorized", retryable=False)
+            protocol.error(str(exc), code="unauthorized", retryable=False)
         )
         await websocket.close(code=CLOSE_UNAUTHORIZED)
         return
 
-    decision = await runtime.limiter.admit(client_identity(websocket, runtime.settings))
+    # A verified JWT subject is identity; a socket peer or spoofable header is
+    # only a rate-limit key. Prefer the former when both are available.
+    identity = jwt_subject or client_identity(websocket, runtime.settings)
+    decision = await runtime.limiter.admit(identity)
     if not decision.allowed:
         await websocket.accept()
         await websocket.send_json(

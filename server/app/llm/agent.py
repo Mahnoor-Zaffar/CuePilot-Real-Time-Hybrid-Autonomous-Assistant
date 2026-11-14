@@ -24,6 +24,17 @@ from app.telemetry.otel import TraceRecorder
 
 logger = logging.getLogger(__name__)
 
+
+def _estimate_tokens(text: str) -> int:
+    """Cheap token estimate: four characters per token.
+
+    Used only for the mid-stream budget cutoff. Provider-reported usage wins
+    whenever it arrives; this is a bound on how much text to stream, not a
+    replacement for accounting.
+    """
+    return max(0, (len(text) + 3) // 4)
+
+
 SYSTEM_PROMPT = """You are CuePilot, a real-time desktop copilot for engineers.
 Answer from the retrieved context when it is sufficient. Cite sources as [1], [2]
 matching the context numbering, or by doc_id. If the context is insufficient, call
@@ -52,6 +63,10 @@ class TurnRequest:
     tools: bool = True
     temperature: float | None = None
     max_tokens: int | None = None
+    # Remaining per-session token budget. The prompt estimate is subtracted,
+    # the provider's `max_tokens` is capped to what is left, and the stream is
+    # cut if estimated usage crosses it.
+    token_limit: int | None = None
 
 
 @dataclass
@@ -82,6 +97,9 @@ class _TurnState:
     finish_reason: str = "stop"
     usage: _Usage = field(default_factory=_Usage)
     tool_iterations: int = 0
+    budget_cutoff: bool = False
+    generated_chars: int = 0
+    prompt_tokens_est: int = 0
 
 
 class Agent:
@@ -185,6 +203,27 @@ class Agent:
             session_id=session.id, turn_id=request.turn_id, scratchpad=session.scratchpad
         )
 
+        # Subtract the prompt estimate from the remaining session budget. What
+        # is left is the generation budget: it caps `max_tokens` and is the
+        # mid-stream cutoff. An exhausted budget ends the turn before the
+        # provider is called.
+        generation_limit: int | None = None
+        if request.token_limit is not None:
+            state.prompt_tokens_est = sum(
+                _estimate_tokens(message.content or "") for message in messages
+            )
+            generation_limit = max(0, request.token_limit - state.prompt_tokens_est)
+            if generation_limit <= 0:
+                state.finish_reason = "token_budget"
+                state.budget_cutoff = True
+                yield self._budget_error(request, "before generation")
+                yield self._done_frame(request, state, started)
+                return
+
+        base_max_tokens = request.max_tokens or self.settings.llm_max_tokens
+        if generation_limit is not None:
+            base_max_tokens = min(base_max_tokens, max(1, generation_limit))
+
         for iteration in range(self.settings.max_tool_iterations + 1):
             state.tool_iterations = iteration
             calls: list[ToolCall] = []
@@ -193,7 +232,7 @@ class Agent:
                 messages,
                 tools=tool_schemas,
                 temperature=request.temperature or self.settings.llm_temperature,
-                max_tokens=request.max_tokens or self.settings.llm_max_tokens,
+                max_tokens=base_max_tokens,
             )
             try:
                 async for event in stream:
@@ -203,7 +242,18 @@ class Agent:
                             root.set(ttft_ms=round(state.ttft_ms, 2))
                         assistant_text += event.text
                         state.assistant_text += event.text
+                        state.generated_chars += len(event.text)
                         yield {"type": "delta", "turn_id": request.turn_id, "text": event.text}
+                        if (
+                            generation_limit is not None
+                            and state.generated_chars / 4 >= generation_limit
+                        ):
+                            # Stop producing text instead of paying for the rest
+                            # of the answer. Closing the provider stream is what
+                            # actually cancels upstream generation.
+                            state.finish_reason = "token_budget"
+                            state.budget_cutoff = True
+                            break
                     elif event.kind == "tool_calls":
                         calls = event.tool_calls
                     elif event.kind == "usage":
@@ -226,6 +276,11 @@ class Agent:
             finally:
                 with contextlib.suppress(Exception):
                     await stream.aclose()
+
+            if state.budget_cutoff:
+                yield self._budget_error(request, "mid-stream")
+                yield self._done_frame(request, state, started)
+                return
 
             if not calls or not request.tools:
                 break
@@ -275,14 +330,33 @@ class Agent:
 
         yield self._done_frame(request, state, started)
 
+    def _budget_error(self, request: TurnRequest, phase: str) -> dict:
+        return {
+            "type": "error",
+            "turn_id": request.turn_id,
+            "code": "session_token_budget",
+            "message": f"session token budget exhausted {phase}; the answer was truncated",
+            "retryable": False,
+        }
+
     def _done_frame(self, request: TurnRequest, state: _TurnState, started: float) -> dict:
+        usage = state.usage.as_dict()
+        if state.budget_cutoff:
+            # The provider may not report usage for a stream we closed early.
+            # Record the estimate so the budget reflects what was spent.
+            if usage["prompt_tokens"] <= 0:
+                usage["prompt_tokens"] = state.prompt_tokens_est
+            if usage["completion_tokens"] <= 0:
+                usage["completion_tokens"] = state.generated_chars // 4
+            if usage["total_tokens"] <= 0:
+                usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         return {
             "type": "done",
             "turn_id": request.turn_id,
             "finish_reason": state.finish_reason,
             "ttft_ms": round(state.ttft_ms, 2) if state.ttft_ms is not None else None,
             "total_ms": round((time.perf_counter() - started) * 1000, 2),
-            "usage": state.usage.as_dict(),
+            "usage": usage,
             "tool_iterations": state.tool_iterations,
             "model": self.provider.model,
         }

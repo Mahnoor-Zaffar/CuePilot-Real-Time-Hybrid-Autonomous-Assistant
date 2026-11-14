@@ -11,8 +11,10 @@ Three independent limits, because they fail in different ways:
   count. `ws_active` is a process gauge, so this cap is intentionally local.
 * A **per-session turn and token budget** bounds how much one conversation may
   spend. Turns are checked at admission, before the provider is called. Tokens
-  are recorded from the completed turn's usage, so the token budget is post-hoc
-  and a turn may overshoot by at most one `llm_max_tokens`.
+  are recorded from the completed turn's usage, and the remaining budget also
+  caps the provider's `max_tokens` and cuts the stream mid-answer when estimated
+  usage crosses it. The estimate is `chars / 4`, so a turn can still overshoot
+  by the estimation error; the cutoff is a bound, not a promise of exactness.
 
 Identity defaults to the socket peer. Behind a trusted proxy, either trust the
 left-most `X-Forwarded-For` hop or name a header the proxy rewrites; an
@@ -156,10 +158,11 @@ class TurnBudget:
     """Per-session turn and token budgets over the same sliding window.
 
     The turn budget is enforced at admission: cheap, and it stops a loop before
-    it reaches the provider. The token budget is enforced post-hoc because a
-    turn's cost is only known after the provider reports usage. The overshoot is
-    therefore bounded by one turn's `max_tokens`, which is stated in the docs
-    rather than papered over.
+    it reaches the provider. The token budget is enforced twice: `remaining()`
+    caps the provider's `max_tokens`, and the agent cuts the stream when its
+    estimated usage crosses the same limit. Because the mid-stream count is an
+    estimate (`chars / 4`, prompt tokens estimated the same way), a turn can
+    still overshoot by the estimation error. That is stated rather than hidden.
     """
 
     backend = "cache"
@@ -226,6 +229,26 @@ class TurnBudget:
             logger.warning("turn budget cache failed, allowing turn: %s", exc)
         return ALLOW
 
+    async def remaining(self, session_id: str) -> int | None:
+        """Tokens left in this session's window, or None when unlimited.
+
+        Called once at admission to cap the provider's `max_tokens`. A cache
+        error returns None (unlimited) and is counted, matching the fail-open
+        policy used by the rest of this module.
+        """
+        limit = self.settings.rate_limit_session_tokens
+        if not self.enabled or limit <= 0:
+            return None
+        try:
+            used = await self.cache.window_sum(
+                self._tokens_key(session_id), window_s=self.window_s
+            )
+        except Exception as exc:  # noqa: BLE001 - fail open, but count it
+            self.metrics.incr("rate_limit_cache_errors")
+            logger.warning("turn budget remaining failed, allowing turn: %s", exc)
+            return None
+        return max(0, int(limit - used))
+
     async def record_turn(self, session_id: str, tokens: int) -> None:
         """Record a completed turn. Called from the terminal path, never mid-stream."""
         if not self.enabled:
@@ -251,6 +274,6 @@ class TurnBudget:
             "window_s": self.window_s,
             "session_turns": self.settings.rate_limit_session_turns,
             "session_tokens": self.settings.rate_limit_session_tokens,
-            "token_budget": "post_hoc_from_completed_usage",
-            "max_overshoot_tokens": self.settings.llm_max_tokens,
+            "token_budget": "admission_cap_and_mid_stream_cutoff",
+            "token_estimate": "chars_div_4",
         }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request, status
 
+from app.auth import AuthError, authenticate
 from app.runtime import Runtime
 
 
@@ -13,9 +14,26 @@ def get_runtime(request: Request) -> Runtime:
 
 
 async def require_auth(request: Request) -> None:
-    """Optional bearer auth: enforced only when api_token is configured."""
+    """Optional auth: JWT when configured, otherwise a static bearer token.
+
+    A configured `auth_jwt_secret` makes JWT verification mandatory; there is no
+    fallback to the static token, because a deployment that turned on identity
+    should not silently accept a shared secret instead.
+    """
     runtime = get_runtime(request)
-    token = runtime.settings.api_token
+    settings = runtime.settings
+    if settings.auth_jwt_secret:
+        try:
+            authenticate(request.headers.get("authorization"), settings)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(exc),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        return
+
+    token = settings.api_token
     if not token:
         return
     supplied = request.headers.get("authorization", "")

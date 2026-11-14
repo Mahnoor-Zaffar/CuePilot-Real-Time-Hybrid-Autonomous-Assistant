@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.main import create_app
 from fastapi.testclient import TestClient
-from tests.conftest import drain_ws, make_settings
+from tests.conftest import drain_ws, make_jwt, make_settings
 
 
 def test_root_and_health(client: TestClient) -> None:
@@ -15,7 +15,7 @@ def test_root_and_health(client: TestClient) -> None:
     assert health["limits"]["enabled"] is True
     assert health["limits"]["algorithm"] == "sliding_window"
     assert health["budget"]["enabled"] is True
-    assert health["budget"]["token_budget"] == "post_hoc_from_completed_usage"
+    assert health["budget"]["token_budget"] == "admission_cap_and_mid_stream_cutoff"
     assert health["durability"]["degraded"] is False
     assert health["journal"]["backend"] == "none"
 
@@ -70,14 +70,14 @@ def test_metrics_and_traces_after_a_turn(client: TestClient) -> None:
     assert metrics["counters"]["turns_total"] >= 1
     assert metrics["histograms"]["ttft_ms"]["count"] >= 1
     assert metrics["backends"]["provider"] == "mock"
-    assert metrics["aggregation"]["instances"] == 1
-    assert metrics["aggregation"]["merged"] is False
+    assert metrics["aggregation"]["mode"] == "per_instance"
+    assert metrics["aggregation"]["instance_id"] == metrics["instance_id"]
     assert metrics["aggregation"]["quantile_method"] == "cumulative_buckets"
     assert metrics["aggregation"]["bucket_bounds_ms"]
     assert "samples" not in metrics["histograms"]["ttft_ms"]
     assert metrics["histograms"]["ttft_ms"]["buckets"]["+Inf"] >= 1
 
-    # The Prometheus endpoint serialises the same merged snapshot as text.
+    # The Prometheus endpoint serialises this replica's snapshot as text.
     prometheus = client.get("/metrics")
     assert prometheus.status_code == 200
     assert prometheus.headers["content-type"].startswith("text/plain")
@@ -112,3 +112,29 @@ def test_auth_is_enforced_when_configured() -> None:
             ).status_code
             == 200
         )
+
+
+def test_jwt_auth_when_configured() -> None:
+    app = create_app(
+        make_settings(
+            auth_jwt_secret="test-secret",
+            auth_jwt_audience="cuepilot",
+            auth_jwt_issuer="identity-proxy",
+        )
+    )
+    good = make_jwt({"sub": "u1", "aud": "cuepilot", "iss": "identity-proxy"})
+    wrong_audience = make_jwt({"sub": "u1", "aud": "other", "iss": "identity-proxy"})
+    wrong_issuer = make_jwt({"sub": "u1", "aud": "cuepilot", "iss": "someone-else"})
+    bad_signature = make_jwt({"sub": "u1", "aud": "cuepilot"}, secret="not-the-secret")
+
+    with TestClient(app) as client:
+        url = "/api/kb/search"
+        params = {"q": "x"}
+        assert client.get(url, params=params).status_code == 401
+        assert (
+            client.get(url, params=params, headers={"Authorization": f"Bearer {good}"}).status_code
+            == 200
+        )
+        for token in (wrong_audience, wrong_issuer, bad_signature):
+            response = client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 401

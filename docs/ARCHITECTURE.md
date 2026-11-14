@@ -63,7 +63,9 @@ not necessarily the order work completes.
    message, records `startedAt`, and sends `{type:"prompt", id, text, options}`.
 2. **Connection** acknowledges with `{type:"ack", turn_id}`. If a turn is already active it
    is aborted first (`superseded`); one active turn per session.
-3. A per-turn `asyncio.Task` starts `Agent.run()`.
+3. A per-turn `asyncio.Task` starts `Agent.run()`. The admission check returns the
+   session's remaining token budget; the agent subtracts its prompt estimate and caps the
+   provider's `max_tokens` to what is left.
 4. **Agent** warms the provider pool (no-op for OpenRouter, whose keep-alive client exists
    already) while concurrently running retrieval. Retrieval failure is logged and the turn
    continues without context.
@@ -218,6 +220,26 @@ enqueued after the final text frame; the client guarantees it is applied after p
 - If the abort arrives on a different replica, the connection publishes `turn.abort` on the
   bus with the session id and turn id; the owning replica cancels the matching task.
 
+## Authentication and identity
+
+Auth is optional and has two mutually exclusive modes:
+
+- **Static token** (`api_token`): REST requires `Authorization: Bearer <token>`, and the
+  WebSocket accepts `?token=<token>` because browsers cannot set headers on a WS handshake.
+- **JWT** (`auth_jwt_secret`): when set, it takes precedence over the static token. The
+  gateway verifies HS256/HS384/HS512 tokens itself using `hmac` from the standard library —
+  no JWT dependency. Only HMAC algorithms are accepted: `alg: none` and asymmetric
+  algorithms are rejected rather than trusted without a key-management story. Verification
+  checks the signature in constant time, `exp`/`nbf` with `auth_jwt_leeway_s`, optional
+  `aud`/`iss`, and that the identity claim (`sub` by default) is a non-empty string.
+
+The verified claim is the **rate-limit identity**, so two clients behind one NAT get
+separate buckets. Without JWT the identity falls back to the socket peer, or to a
+`rate_limit_identity_header` / `X-Forwarded-For` hop when the operator explicitly trusts a
+proxy. A trusted header is an operator contract, not authentication; anyone who can reach
+the port can spoof it. Authentication has no fail-open path: an invalid token is a 401 on
+REST and a `4401` close on the socket.
+
 ## Sessions and resume
 
 Three tiers, each with one job:
@@ -241,15 +263,20 @@ A turn has two write classes:
   `turn_checkpoint_interval_ms` (250 ms). They are droppable: the next checkpoint carries
   the whole answer so far, so shedding one costs at most one interval of crash protection.
 - **Terminal writes** (`done`, `aborted`, `error`) are the transcript. When the queue is full
-  or the write fails after its retry, the record is appended to a bounded local NDJSON spool
-  (first) and, if that is unavailable or full, to the shared cache as
-  `cuepilot:spool:turn:*` with a TTL of `session_journal_spool_cache_ttl_s`. Both are
-  replayed in the background (`session_journal_spool_retry_s`, 30 s) and once during
-  graceful shutdown. The local spool is capped at `session_journal_spool_max_bytes` (8 MB);
-  when both the local spool and the cache fail, `durability_degraded` is set and new prompts
-  are refused with retryable `journal_unavailable` until a write or replay succeeds. The
-  cache fallback's durability depends on Redis persistence, which is the operator's
-  responsibility.
+  or the write fails after its retry, the record goes to three durable tiers in order:
+  1. the bounded local NDJSON spool (`session_journal_spool_path`);
+  2. the Postgres `turn_outbox` table, which is written in the same database the journal
+     drains into, so it survives losing the container filesystem;
+  3. the shared cache as `cuepilot:spool:turn:*` with a TTL of
+     `session_journal_spool_cache_ttl_s`.
+
+  All three are replayed in the background (`session_journal_spool_retry_s`, 30 s) and once
+  during graceful shutdown. A replayed outbox row is deleted only after its `turns` write
+  commits. The local spool is capped at `session_journal_spool_max_bytes` (8 MB). When all
+  three tiers fail, `durability_degraded` is set and new prompts are refused with retryable
+  `journal_unavailable` until a write or replay succeeds. The cache tier's durability
+  depends on Redis persistence, which is the operator's responsibility; the outbox does
+  not.
 
 After a successful terminal write, the in-flight checkpoint key (`cuepilot:inflight:{session_id}`)
 is deleted by the journal. Until then it carries the newest partial text with a
@@ -264,12 +291,15 @@ case rather than the turn. `turns.updated_at` is what makes stale recovery possi
 
 Reads go hot dict → Redis → Postgres → new session. A Redis miss is a cache miss, not data
 loss: the journal rebuilds the header plus the most recent `turn_history_limit` turns, and
-the connection replays history exactly as it would after a Redis hit. Replayed turns that
-were recovered from a checkpoint carry `interrupted: true` and a `partial` flag with a
-`checkpointed_at` timestamp. The in-flight key is merged last when present, so the newest
-partial survives even when the journal checkpoint is one interval behind. With no Postgres
-the journal is absent (`journal.backend = "none"`) and the manager is mirror-only, which the
-health endpoint reports instead of hiding.
+the connection replays history exactly as it would after a Redis hit. Every replayed message
+carries its stable `turn_id`; turns recovered from a checkpoint also carry
+`interrupted: true` and a `partial` flag with a `checkpointed_at` timestamp. The client
+reconciles the replay against its local transcript by `turn_id`, keeping the longer text and
+preserving locally-known sources, tools, and metrics, so a reconnect cannot duplicate or
+truncate a turn that both sides partly saw. The in-flight key is merged last when present,
+so the newest partial survives even when the journal checkpoint is one interval behind. With
+no Postgres the journal is absent (`journal.backend = "none"`) and the manager is
+mirror-only, which the health endpoint reports instead of hiding.
 
 On connect the client sends its stored session id. If found anywhere in that chain, the
 server marks the connection `resumed: true` and replays `history` (last 20 messages). If
@@ -341,25 +371,25 @@ Default is `none`: spans are recorded in-process only.
 
 `Metrics` is dependency-free: counters, gauges, and bounded histograms (`ttft_ms`,
 `turn_total_ms`, `retrieval_ms`, `bm25_ms`, `dense_ms`, `fusion_ms`, `tool_call_ms`,
-`ws_send_ms`). `GET /api/metrics` returns the merged fleet snapshot plus backend identities
-and derived cache hit rate. Counters of note: `delta_frames_sent`, `delta_tokens_sent`,
-`delta_frames_dropped`, `control_frames_waited`, `provider_retries`, `provider_fallbacks`,
-`turns_aborted`, `ws_bad_frames`, `ws_stale_closed`, `ws_sessions_resumed`,
-`ws_rejected_rate_limit`, `ws_rejected_connection_cap`, `rate_limit_cache_errors`,
-`turn_checkpoints_dropped`, `session_journal_spooled`, `session_journal_replayed`,
+`ws_send_ms`). `GET /api/metrics` returns **this replica's** snapshot plus backend
+identities and derived cache hit rate. Counters of note: `delta_frames_sent`,
+`delta_tokens_sent`, `delta_frames_dropped`, `control_frames_waited`, `provider_retries`,
+`provider_fallbacks`, `turns_aborted`, `ws_bad_frames`, `ws_stale_closed`,
+`ws_sessions_resumed`, `ws_rejected_rate_limit`, `ws_rejected_connection_cap`,
+`rate_limit_cache_errors`, `turn_checkpoints_dropped`, `session_journal_spooled`,
+`session_journal_replayed`, `session_journal_outboxed`, `session_journal_outbox_replayed`,
 `session_journal_cache_spooled`, `session_journal_cache_replayed`,
 `session_journal_durability_degraded`, `turns_rejected_turn_budget`,
 `turns_rejected_token_budget`, `turns_rejected_journal_unavailable`.
 
-Each replica publishes a bucket snapshot to `cuepilot:metrics:{instance_id}` every
-`metrics_publish_interval_s` (10 s) with a TTL of `metrics_publish_ttl_s` (30 s).
-`/api/metrics` merges every live snapshot: counters and additive gauges are summed, and
-histogram buckets are merged additively, so every observation is counted; percentiles are
-interpolated within the fixed bucket layout. The `aggregation` block names the instances,
-whether the response is merged, and the quantile method (`cumulative_buckets`) and bucket
-bounds. `GET /metrics` renders the same merged snapshot in Prometheus text format. The
-merge is pure and unit-tested (`telemetry/aggregate.py`); it is a stopgap for a real
-metrics backend, not a replacement.
+Metrics are **per replica**. `/metrics` renders this process in Prometheus text format;
+Prometheus scrapes every replica and is the aggregation layer. The gateway deliberately
+does not publish snapshots to the cache or merge them in-process: a merged total from
+short-lived replicas moves backwards on restart and cannot produce exact fleet quantiles.
+`/api/metrics` labels its response with `aggregation.mode = "per_instance"`, the
+`instance_id`, the quantile method (`cumulative_buckets`), and the bucket bounds, so a
+caller can tell a single-process answer from a fleet aggregate. Histogram percentiles are
+interpolated within the fixed bucket layout and are therefore bucket-resolution, not exact.
 
 ## Data model
 
@@ -375,6 +405,16 @@ CREATE TABLE kb_chunks (
 );
 CREATE INDEX ... USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64);
 CREATE TABLE kb_meta (id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1), version INT, updated_at timestamptz);
+CREATE TABLE turn_outbox (
+  session_id TEXT NOT NULL,
+  turn_id    TEXT NOT NULL,
+  payload    JSONB NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, turn_id)
+);
 ```
 
 Chunk ids are `{doc_id}#{index}-{sha1(doc_id:index:piece)[:16]}`, so re-ingesting the same
@@ -400,19 +440,21 @@ OTel disabled-by-export.
   (`tsvector`/`pg_trgm`) or OpenSearch and treat the store as the only index.
 - **Exact search fallback.** `MemoryVectorStore` is O(n) per query. Fine for thousands of
   chunks, wrong for millions; it exists to keep the demo and tests hermetic.
-- **Bucket-resolution cross-replica metrics.** Counters and gauges merge exactly; histogram
-  percentiles are interpolated within fixed buckets, so they are not exact quantiles. At
-  scale, push to Prometheus/OTLP and stop merging in-process.
-- **Write-behind journal with a local spool and a cache fallback.** One worker drains the
-  queue, so a slow Postgres costs checkpoints and, at worst, spills terminal writes to a
-  capped local file and then to the shared cache. The cache fallback depends on Redis
-  persistence. At scale the `turns` table needs partitioning by session and age, the spool
-  should be a durable queue, and the journal should stream to an analytics sink rather than
-  being read back one session at a time.
-- **Bounded rate limiting.** Sliding-window counters plus per-replica socket cap, plus
-  per-session turn and token budgets enforced post-hoc (a turn may overshoot by one
-  `max_tokens`). Identity is socket-peer unless the operator names a trusted header or
-  enables `X-Forwarded-For`. At scale, push to a real rate-limit backend.
+- **Per-replica metrics.** The gateway reports its own process and leaves fleet aggregation
+  to Prometheus/OTLP. Histogram percentiles are interpolated within fixed buckets, so they
+  are bucket-resolution, not exact quantiles, and counters reset when a replica restarts.
+- **Write-behind journal with a local spool, a Postgres outbox, and a cache fallback.** One
+  worker drains the queue, so a slow Postgres costs checkpoints and, at worst, spills
+  terminal writes to a capped local file, then the durable `turn_outbox`, then the shared
+  cache. The cache fallback depends on Redis persistence; the outbox does not. At scale the
+  `turns` table needs partitioning by session and age, and the journal should stream to an
+  analytics sink rather than being read back one session at a time.
+- **Bounded rate limiting.** Sliding-window counters plus a per-replica socket cap, plus
+  per-session turn and token budgets. The token budget caps the provider's `max_tokens` and
+  cuts the stream mid-answer when estimated usage crosses it; because the count is an
+  estimate (`chars / 4`), a turn can still overshoot by the estimation error. Identity is a
+  verified JWT subject when auth is configured, otherwise the socket peer or an
+  operator-trusted header. At scale, push to a real rate-limit backend.
 - **No cross-encoder rerank.** RRF is cheap and robust; a reranker would improve precision
   on a larger corpus at the cost of a second model call.
 - **Single active turn per session.** Simplifies cancellation and ordering. Concurrent

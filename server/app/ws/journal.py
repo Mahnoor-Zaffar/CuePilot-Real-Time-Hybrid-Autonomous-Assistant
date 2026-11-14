@@ -15,7 +15,8 @@ Now the write path is write-behind:
 * A **terminal** turn (`done`, `aborted`, `error`) is enqueued on the same points
   where the terminal frame is emitted. It is the transcript, so it is never
   silently dropped: if the bounded queue is full or the write fails, the record
-  is appended to a small on-disk spool and replayed later.
+  goes to a small on-disk spool, then to a durable Postgres outbox
+  (`turn_outbox`), then to the shared cache, and is replayed later.
 * One worker drains the queue. If Postgres stalls, the token path still never
   waits on durability; checkpoints are shed and terminal turns spool.
 
@@ -96,6 +97,34 @@ SET status = 'aborted', finish_reason = 'interrupted', updated_at = now()
 WHERE session_id = $1 AND status = 'streaming' AND updated_at < $2
 """
 
+# Durable outbox. The local spool is the fast fallback; this table is the one
+# that survives losing the container filesystem. The relay reads oldest-first,
+# writes the turn, then deletes the row.
+_OUTBOX_INSERT = """
+INSERT INTO turn_outbox (session_id, turn_id, payload)
+VALUES ($1, $2, $3::jsonb)
+ON CONFLICT (session_id, turn_id) DO UPDATE SET
+    payload = EXCLUDED.payload,
+    updated_at = now()
+"""
+
+_OUTBOX_SELECT = """
+SELECT session_id, turn_id, payload
+FROM turn_outbox
+ORDER BY created_at ASC, turn_id ASC
+LIMIT $1
+"""
+
+_OUTBOX_DELETE = "DELETE FROM turn_outbox WHERE session_id = $1 AND turn_id = $2"
+
+_OUTBOX_FAIL = """
+UPDATE turn_outbox
+SET attempts = attempts + 1, last_error = $3, updated_at = now()
+WHERE session_id = $1 AND turn_id = $2
+"""
+
+_OUTBOX_REPLAY_BATCH = 100
+
 
 @dataclass(frozen=True, slots=True)
 class TurnRecord:
@@ -155,9 +184,10 @@ class JournalSpool:
     and a Postgres outage; it does not survive losing the container filesystem.
     It is bounded (`session_journal_spool_max_bytes`) so a long outage cannot
     fill the disk. When the local spool is full or unwritable, `TurnJournal`
-    falls back to the shared cache (`session_journal_spool_cache_ttl_s`), so a
-    lost container filesystem does not automatically mean a lost transcript.
-    Both limits are reported in health and the failure docs.
+    falls back to the durable Postgres outbox (`turn_outbox`), then to the shared
+    cache (`session_journal_spool_cache_ttl_s`), so a lost container filesystem
+    does not automatically mean a lost transcript. Both limits are reported in
+    health and the failure docs.
     """
 
     def __init__(self, path: str | Path | None, settings: Settings, metrics: Metrics) -> None:
@@ -281,6 +311,8 @@ class TurnJournal:
         self.written = 0
         self.dropped = 0
         self.failed = 0
+        self.outboxed = 0
+        self.outbox_replayed = 0
         self.cache_spooled = 0
         self.cache_replayed = 0
 
@@ -288,7 +320,10 @@ class TurnJournal:
     async def start(self) -> None:
         if self._worker is None:
             self._worker = asyncio.create_task(self._drain(), name="session-journal")
-        if (self._spool.enabled or self._cache is not None) and self._spool_task is None:
+        # The replay loop drains the local spool, the Postgres outbox, and the
+        # cache spool. It must run even when both the local spool and cache are
+        # disabled: the outbox is still a fallback tier for terminal writes.
+        if self._spool_task is None:
             self._spool_task = asyncio.create_task(self._spool_loop(), name="journal-spool")
 
     async def stop(self) -> None:
@@ -346,11 +381,19 @@ class TurnJournal:
         return self.submit(turn)
 
     async def record_terminal(self, turn: TurnRecord) -> bool:
-        """Enqueue a terminal turn, falling back to disk then the shared cache.
+        """Enqueue a terminal turn, falling back to disk, outbox, then cache.
 
-        The local spool is tried first because it is cheap and survives a process
-        crash. The cache is the second line: it survives losing the container
-        filesystem, at the cost of depending on the cache's own persistence.
+        The tiers trade latency for durability:
+
+        1. **Local spool** — cheap, survives a process crash, lost with the
+           container filesystem.
+        2. **Postgres outbox** — survives losing the container filesystem and
+           does not depend on Redis persistence. Used when the local spool is
+           unavailable or full (for example a read-only or size-capped volume).
+        3. **Shared cache** — last resort, dependent on Redis persistence.
+
+        If none accepts the record, `durability_degraded` is set and new prompts
+        are refused until a write or replay succeeds.
         """
         try:
             self._queue.put_nowait(turn)
@@ -361,12 +404,35 @@ class TurnJournal:
     async def _spool_terminal(self, turn: TurnRecord) -> bool:
         if await asyncio.to_thread(self._spool.append, turn):
             return True
+        if await self._outbox_append(turn):
+            return True
         if await self._cache_append(turn):
             return True
-        self._mark_degraded("terminal turn could not be spooled to disk or cache")
+        self._mark_degraded("terminal turn could not be spooled to disk, outbox, or cache")
         self.dropped += 1
         self._metrics.incr("session_journal_dropped")
         return False
+
+    async def _outbox_append(self, turn: TurnRecord) -> bool:
+        """Append a terminal turn to the durable Postgres outbox."""
+        try:
+            async with self._pool.acquire() as conn:
+                await asyncio.wait_for(
+                    conn.execute(
+                        _OUTBOX_INSERT,
+                        turn.session_id,
+                        turn.turn_id,
+                        _json(asdict(turn)),
+                    ),
+                    timeout=self._settings.session_journal_timeout_s,
+                )
+        except Exception as exc:  # noqa: BLE001 - the outbox is a fallback
+            self._metrics.incr("session_journal_outbox_errors")
+            logger.warning("outbox append failed: %s", exc)
+            return False
+        self.outboxed += 1
+        self._metrics.incr("session_journal_outboxed")
+        return True
 
     async def _cache_append(self, turn: TurnRecord) -> bool:
         if self._cache is None:
@@ -433,9 +499,14 @@ class TurnJournal:
                 self._queue.task_done()
 
     async def replay_spool(self) -> int:
-        """Try every spooled terminal turn once. Returns how many were written."""
+        """Try every spooled terminal turn once. Returns how many were written.
+
+        Tiers are drained in the order they were written: local spool, then the
+        durable outbox, then the cache. Any success clears the degraded flag.
+        """
         async with self._replay_lock:
             written = await self._replay_spool_locked()
+            written += await self._replay_outbox_locked()
             written += await self._replay_cache_spool_locked()
             if written:
                 self._note_durable()
@@ -473,6 +544,70 @@ class TurnJournal:
             self._spool.append(record)
         await asyncio.to_thread(self._spool.remove, replay_path)
         return written
+
+    async def _replay_outbox_locked(self) -> int:
+        """Drain the durable outbox into `turns`, oldest first.
+
+        A row is deleted only after its `turns` upsert commits. A failed write
+        leaves the row in place with an incremented attempt count, so the next
+        pass retries it instead of dropping the transcript.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await asyncio.wait_for(
+                    conn.fetch(_OUTBOX_SELECT, _OUTBOX_REPLAY_BATCH),
+                    timeout=self._settings.session_journal_timeout_s,
+                )
+        except Exception as exc:  # noqa: BLE001 - replay is best effort
+            self._metrics.incr("session_journal_outbox_errors")
+            logger.warning("outbox read failed: %s", exc)
+            return 0
+        written = 0
+        for row in rows:
+            session_id = str(row["session_id"])
+            turn_id = str(row["turn_id"])
+            try:
+                payload = row["payload"]
+                record = TurnRecord(
+                    **(json.loads(payload) if isinstance(payload, str) else payload)
+                )
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                # A poison row would otherwise be retried forever. Count it and
+                # remove it; the original terminal write is already lost.
+                self._metrics.incr("session_journal_outbox_errors")
+                logger.warning("dropping unreadable outbox row %s/%s: %s", session_id, turn_id, exc)
+                await self._delete_outbox(session_id, turn_id)
+                continue
+            try:
+                await self._write_with_retry(record)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - leave the row for the next pass
+                await self._fail_outbox(session_id, turn_id, exc)
+                continue
+            written += 1
+            self.written += 1
+            self.outbox_replayed += 1
+            self._metrics.incr("session_journal_written")
+            self._metrics.incr("session_journal_outbox_replayed")
+            await self._delete_outbox(session_id, turn_id)
+            await self._clear_inflight(session_id)
+        return written
+
+    async def _delete_outbox(self, session_id: str, turn_id: str) -> None:
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(_OUTBOX_DELETE, session_id, turn_id)
+        except Exception as exc:  # noqa: BLE001 - the next replay will retry
+            self._metrics.incr("session_journal_outbox_errors")
+            logger.warning("outbox delete failed for %s/%s: %s", session_id, turn_id, exc)
+
+    async def _fail_outbox(self, session_id: str, turn_id: str, exc: Exception) -> None:
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(_OUTBOX_FAIL, session_id, turn_id, f"{type(exc).__name__}: {exc}"[:400])
+        except Exception:  # noqa: BLE001 - the row is already retained
+            self._metrics.incr("session_journal_outbox_errors")
 
     async def _replay_cache_spool_locked(self) -> int:
         if self._cache is None:
@@ -605,7 +740,16 @@ class TurnJournal:
         history: list[dict[str, Any]] = []
         for turn in turns[-self._settings.turn_history_limit :]:
             interrupted = turn["status"] == "streaming" or turn["finish_reason"] == "interrupted"
-            user_message: dict[str, Any] = {"role": "user", "content": turn["prompt"]}
+            turn_id = turn.get("turn_id")
+            # Every message carries its stable `turn_id`, not just interrupted
+            # ones, so a reconnecting client can reconcile by identity instead
+            # of guessing from array position.
+            user_message: dict[str, Any] = {
+                "role": "user",
+                "content": turn["prompt"],
+            }
+            if turn_id:
+                user_message["turn_id"] = turn_id
             if interrupted:
                 user_message["interrupted"] = True
             history.append(user_message)
@@ -614,12 +758,11 @@ class TurnJournal:
                     "role": "assistant",
                     "content": turn["answer"],
                 }
+                if turn_id:
+                    assistant_message["turn_id"] = turn_id
                 if interrupted:
                     assistant_message["interrupted"] = True
                     assistant_message["partial"] = True
-                    turn_id = turn.get("turn_id")
-                    if turn_id:
-                        assistant_message["turn_id"] = turn_id
                     updated_at = turn.get("updated_at")
                     if updated_at is not None:
                         assistant_message["checkpointed_at"] = updated_at.timestamp()
@@ -673,6 +816,12 @@ class TurnJournal:
             "spool": self._spool.stats(),
             "durability": {
                 "degraded": self._durability_degraded,
+                "outbox": {
+                    "backend": "postgres",
+                    "table": "turn_outbox",
+                    "spooled": self.outboxed,
+                    "replayed": self.outbox_replayed,
+                },
                 "cache_spool": {
                     "backend": self._cache.backend if self._cache is not None else None,
                     "shared": bool(self._cache is not None and self._cache.backend == "redis"),
@@ -681,8 +830,8 @@ class TurnJournal:
                     "ttl_s": self._settings.session_journal_spool_cache_ttl_s,
                 },
                 "note": (
-                    "terminal writes try the local spool first, then the shared cache; "
-                    "cache durability depends on Redis persistence"
+                    "terminal writes try the local spool, then the durable Postgres outbox, "
+                    "then the shared cache; cache durability depends on Redis persistence"
                 ),
             },
         }

@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     env: Literal["dev", "test", "prod"] = "dev"
     log_level: str = "INFO"
     api_token: str | None = None
+    # Optional HS256 JWT verification (stdlib HMAC, no dependency). When
+    # `auth_jwt_secret` is set, HTTP requests and the WebSocket handshake must
+    # carry a valid `Authorization: Bearer <jwt>`; the configured claim becomes
+    # the rate-limit identity. When unset, behaviour is unchanged.
+    auth_jwt_secret: str | None = None
+    auth_jwt_algorithms: list[str] = Field(default_factory=lambda: ["HS256"])
+    auth_jwt_audience: str | None = None
+    auth_jwt_issuer: str | None = None
+    auth_jwt_identity_claim: str = "sub"
+    auth_jwt_leeway_s: int = 30
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
     # ── LLM (OpenRouter speaks the OpenAI chat-completions dialect) ────────
@@ -104,8 +114,10 @@ class Settings(BaseSettings):
     rate_limit_trust_forwarded_for: bool = False
     rate_limit_identity_header: str | None = None
     # Per-session budgets over the same window. Turns are checked at admission;
-    # tokens are recorded after each completed turn, so a turn can overshoot by
-    # at most one `llm_max_tokens`. 0 disables that budget.
+    # the remaining token budget also caps the provider's `max_tokens`, and the
+    # stream is cut off mid-answer if streamed usage crosses it. A completed
+    # turn can still overshoot slightly because usage is only known after the
+    # provider reports it. 0 disables that budget.
     rate_limit_session_turns: int = 30
     rate_limit_session_tokens: int = 120_000
 
@@ -123,9 +135,10 @@ class Settings(BaseSettings):
     turn_checkpoint_stale_s: float = 60.0
     session_journal_spool_path: str = "data/journal-spool.ndjson"
     session_journal_spool_max_bytes: int = 8_000_000
-    # When local disk is unavailable or full, terminal turns fall back to the
-    # shared cache. Redis persistence (AOF/RDB) is the operator's responsibility;
-    # a cache with no persistence is still better than dropping the transcript.
+    # When local disk is unavailable or full, terminal turns go to the durable
+    # Postgres outbox (`turn_outbox`), then to the shared cache. Redis persistence
+    # (AOF/RDB) is the operator's responsibility; a cache with no persistence is
+    # still better than dropping the transcript.
     session_journal_spool_cache_ttl_s: int = 3600
     session_journal_spool_retry_s: float = 30.0
 
@@ -142,13 +155,13 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://127.0.0.1:4318"
     otel_service_name: str = "cuepilot-gateway"
     trace_buffer_turns: int = 200
-    # Each replica publishes a bucket snapshot to the shared cache; /api/metrics
-    # merges every live snapshot additively (every observation is counted) and
-    # /metrics renders the same snapshot for Prometheus to scrape.
-    metrics_publish_interval_s: float = 10.0
-    metrics_publish_ttl_s: int = 30
+    # Metrics are per-replica. `/metrics` renders this process for Prometheus to
+    # scrape and aggregate; `/api/metrics` returns the same snapshot as JSON.
+    # The gateway does not merge snapshots in-process.
 
-    @field_validator("cors_origins", "llm_fallback_models", mode="before")
+    @field_validator(
+        "cors_origins", "llm_fallback_models", "auth_jwt_algorithms", mode="before"
+    )
     @classmethod
     def _split_csv(cls, value: object) -> object:
         """Accept both JSON arrays and comma-separated strings from env."""

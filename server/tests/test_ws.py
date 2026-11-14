@@ -5,11 +5,12 @@ import base64
 import time
 
 from app.infra.cache import MemoryCache
+from app.llm.base import ChatProvider, StreamEvent
 from app.main import create_app
 from app.telemetry.metrics import Metrics
 from app.ws.limits import ClientLimiter, TurnBudget, client_identity
 from fastapi.testclient import TestClient
-from tests.conftest import drain_ws, make_settings
+from tests.conftest import drain_ws, make_jwt, make_settings
 
 
 def handshake(ws) -> dict:
@@ -283,3 +284,98 @@ def test_websocket_auth_rejects_bad_token() -> None:
 
         with client.websocket_connect("/ws/stream?token=secret") as ws:
             assert handshake(ws)["type"] == "ready"
+
+
+def test_websocket_jwt_auth_and_identity() -> None:
+    app = create_app(
+        make_settings(
+            auth_jwt_secret="test-secret",
+            rate_limit_connect_attempts=1,
+            rate_limit_window_s=60,
+        )
+    )
+    token_a = make_jwt({"sub": "user-a"})
+    token_b = make_jwt({"sub": "user-b"})
+
+    with TestClient(app) as client:
+        # No token: rejected before the handshake.
+        with client.websocket_connect("/ws/stream") as ws:
+            frame = ws.receive_json()
+            assert frame["type"] == "error"
+            assert frame["code"] == "unauthorized"
+
+        # A malformed or expired token is also rejected.
+        with client.websocket_connect("/ws/stream?token=not-a-jwt") as ws:
+            assert ws.receive_json()["code"] == "unauthorized"
+        expired = make_jwt({"sub": "user-a"}, expires_in=-120)
+        with client.websocket_connect(f"/ws/stream?token={expired}") as ws:
+            assert ws.receive_json()["code"] == "unauthorized"
+
+        with client.websocket_connect(f"/ws/stream?token={token_a}") as ws:
+            assert handshake(ws)["type"] == "ready"
+
+        # The verified subject is the rate-limit identity: the same subject is
+        # over its window, a different subject is not.
+        with client.websocket_connect(f"/ws/stream?token={token_a}") as ws:
+            assert ws.receive_json()["code"] == "client_rate_limited"
+        with client.websocket_connect(f"/ws/stream?token={token_b}") as ws:
+            assert handshake(ws)["type"] == "ready"
+
+
+async def test_turn_budget_remaining_is_the_generation_cap() -> None:
+    cache = MemoryCache()
+    budget = TurnBudget(
+        cache, make_settings(rate_limit_session_tokens=100), Metrics()
+    )
+
+    assert await budget.remaining("s1") == 100
+    await budget.record_turn("s1", 40)
+    assert await budget.remaining("s1") == 60
+    await budget.record_turn("s1", 60)
+    assert await budget.remaining("s1") == 0
+    await cache.close()
+
+
+class _LongProvider(ChatProvider):
+    """Streams far more text than any test budget allows."""
+
+    name = "long"
+    model = "long/test"
+    chunks = 60
+
+    async def warm(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def stream(self, messages, *, tools=None, temperature=0.2, max_tokens=700):
+        for _ in range(self.chunks):
+            yield StreamEvent(kind="delta", text="x" * 400)
+        yield StreamEvent(
+            kind="usage",
+            usage={"prompt_tokens": 1, "completion_tokens": 6000, "total_tokens": 6001},
+        )
+        yield StreamEvent(kind="finish", finish_reason="stop")
+
+
+def test_a_long_answer_is_cut_off_at_the_session_token_budget() -> None:
+    app = create_app(make_settings(rate_limit_session_tokens=5000))
+    with TestClient(app) as client:
+        runtime = client.app.state.runtime
+        provider = _LongProvider()
+        runtime.provider = provider  # type: ignore[assignment]
+        runtime.agent.provider = provider  # type: ignore[assignment]
+        with client.websocket_connect("/ws/stream") as ws:
+            handshake(ws)
+            ws.send_json({"type": "prompt", "id": "t1", "text": "stream forever"})
+            frames = drain_ws(ws, until="done")
+
+    deltas = [frame for frame in frames if frame["type"] == "delta"]
+    errors = [frame for frame in frames if frame["type"] == "error"]
+    assert 0 < len(deltas) < provider.chunks
+    assert errors and errors[0]["code"] == "session_token_budget"
+    assert errors[0]["retryable"] is False
+    done = frames[-1]
+    assert done["finish_reason"] == "token_budget"
+    assert done["usage"]["completion_tokens"] > 0
