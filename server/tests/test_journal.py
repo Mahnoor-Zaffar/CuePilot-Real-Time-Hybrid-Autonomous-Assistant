@@ -651,7 +651,7 @@ async def test_journal_round_trips_through_postgres() -> None:
     assert pool is not None
     try:
         await run_migrations(pool, params={"embedding_dim": 256})
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
 
         journal = TurnJournal(pool, make_settings(), Metrics())
         await journal.start()
@@ -676,8 +676,16 @@ async def test_journal_round_trips_through_postgres() -> None:
         assert record is not None
         assert record["client"] == {"app": "test"}
         assert record["history"] == [
-            {"role": "user", "content": "why do clients reconnect all at once"},
-            {"role": "assistant", "content": "thundering herd"},
+            {
+                "role": "user",
+                "content": "why do clients reconnect all at once",
+                "turn_id": "t1",
+            },
+            {
+                "role": "assistant",
+                "content": "thundering herd",
+                "turn_id": "t1",
+            },
         ]
 
         turns = await journal.load_turns(session.id)
@@ -686,7 +694,7 @@ async def test_journal_round_trips_through_postgres() -> None:
         assert turns[0]["usage"] == {"total_tokens": 42}
         assert turns[0]["model"] == "mock/echo-1"
     finally:
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
         await pool.close()
 
 
@@ -699,7 +707,7 @@ async def test_a_checkpoint_is_replaced_by_the_terminal_turn() -> None:
     assert pool is not None
     try:
         await run_migrations(pool, params={"embedding_dim": 256})
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
 
         journal = TurnJournal(pool, make_settings(), Metrics())
         await journal.start()
@@ -731,7 +739,7 @@ async def test_a_checkpoint_is_replaced_by_the_terminal_turn() -> None:
         assert turns[0]["status"] == "done"
         assert turns[0]["answer"] == "backpressure and a bounded queue"
     finally:
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
         await pool.close()
 
 
@@ -744,7 +752,7 @@ async def test_a_stale_streaming_turn_is_marked_interrupted_on_read() -> None:
     assert pool is not None
     try:
         await run_migrations(pool, params={"embedding_dim": 256})
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
         await pool.execute(
             "INSERT INTO sessions (id) VALUES ('stale'); "
             "INSERT INTO turns (session_id, turn_id, prompt, answer, status, updated_at) "
@@ -766,7 +774,7 @@ async def test_a_stale_streaming_turn_is_marked_interrupted_on_read() -> None:
         )
         assert reason == "interrupted"
     finally:
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
         await pool.close()
 
 
@@ -781,7 +789,7 @@ async def test_a_turn_can_land_before_its_session_row() -> None:
     assert pool is not None
     try:
         await run_migrations(pool, params={"embedding_dim": 256})
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
 
         journal = TurnJournal(pool, make_settings(), Metrics())
         await journal.start()
@@ -791,7 +799,47 @@ async def test_a_turn_can_land_before_its_session_row() -> None:
         assert await pool.fetchval("SELECT count(*) FROM turns WHERE session_id = 'orphan'") == 1
         assert await pool.fetchval("SELECT count(*) FROM sessions WHERE id = 'orphan'") == 1
     finally:
-        await pool.execute("DELETE FROM turns; DELETE FROM sessions")
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
+        await pool.close()
+
+
+@pytestmark_pg
+async def test_the_outbox_replays_a_terminal_turn_into_turns() -> None:
+    # Prove the durable tier against real Postgres: a terminal turn with no
+    # local spool lands in `turn_outbox`, replay writes `turns`, and the row is
+    # deleted only after the write commits.
+    import asyncpg
+    from app.infra.migrations import run_migrations
+
+    pool = await asyncpg.create_pool(PG_URL, min_size=1, max_size=2)
+    assert pool is not None
+    try:
+        await run_migrations(pool, params={"embedding_dim": 256})
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
+
+        # No background worker: this exercises the fallback and relay directly.
+        journal = TurnJournal(
+            pool, make_settings(session_journal_queue=1), Metrics()
+        )
+        assert journal.submit(turn(session_id="s-outbox", turn_id="t1")) is True
+        assert (
+            await journal.record_terminal(turn(session_id="s-outbox", turn_id="t2"))
+            is True
+        )
+        assert await pool.fetchval("SELECT count(*) FROM turn_outbox") == 1
+
+        written = await journal.replay_spool()
+
+        assert written == 1
+        assert await pool.fetchval("SELECT count(*) FROM turn_outbox") == 0
+        assert (
+            await pool.fetchval(
+                "SELECT count(*) FROM turns WHERE session_id = 's-outbox' AND turn_id = 't2'"
+            )
+            == 1
+        )
+    finally:
+        await pool.execute("DELETE FROM turn_outbox; DELETE FROM turns; DELETE FROM sessions")
         await pool.close()
 
 
