@@ -13,7 +13,7 @@ degradation instead of hiding it.
 |---|---|---|---|
 | Gateway unreachable | socket close/error | jittered reconnect banner | automatic, ≤8 attempts |
 | Server restart mid-turn | close during stream | reconnect + resume + replay; partial turn marked `interrupted` | automatic |
-| Connection flood | sliding-window counter + per-replica gauge | `client_rate_limited` / `connection_cap` + close `4429` | after `retry_after_ms` |
+| Connection flood | sliding window or token bucket + per-replica gauge | `client_rate_limited` / `connection_cap` + close `4429` | after `retry_after_ms` |
 | Provider 429 | HTTP 429 / SSE error | retry with backoff → model fallback → `rate_limited` | user retries |
 | Provider 5xx / transport | status/exception | same as 429, then `provider_unavailable` | user retries |
 | Provider dies mid-stream | exception after first token | **no retry**, terminal `error` | user retries |
@@ -416,20 +416,29 @@ applied when the tab is visible again; it is not dropped.
 
 ## Known gaps
 
-- **Rate limiting is bounded, not exact.** The connection counter is a sliding window over
-  the configured window, so there is no boundary burst, but it is still a counter, not a
-  leaky bucket. Per-session turn and token budgets are enforced; the token budget caps the
-  provider's `max_tokens` and cuts the stream mid-answer when estimated usage crosses it.
-  The mid-stream count is `chars / 4`, so a turn can still overshoot by the estimation error.
-  The connection cap stays per-replica because `ws_active` is a process gauge. Identity is a
-  verified JWT subject when auth is configured; otherwise the socket peer or an
-  operator-trusted header — an untrusted header is a spoofable key.
+- **Rate limiting is bounded, not exact.** Connection opens use a sliding window by default,
+  or an optional continuously refilling token bucket (`rate_limit_algorithm=token_bucket`)
+  that permits a burst up to `rate_limit_bucket_capacity` and then a sustained rate. Both
+  are atomic in Redis and per-replica with the in-memory fallback. Per-session turn and
+  token budgets are enforced; the token budget caps the provider's `max_tokens` and cuts the
+  stream mid-answer when the calibrated estimate crosses it. The estimate starts at
+  `chars / 4` and adapts to provider-reported usage, so a turn can still overshoot by the
+  residual estimation error. The connection cap stays per-replica because `ws_active` is a
+  process gauge. Identity is a verified JWT subject when auth is configured; otherwise the
+  socket peer or an operator-trusted header — an untrusted header is a spoofable key.
+- **Auth audit is a log line and a counter, not a SIEM.** Rejected JWT handshakes are one
+  structured JSON line (surface, reason, remote, path, alg, kid) plus `auth_rejections`
+  counters; the token is never logged. RS/PS/ES keys come from a cached JWKS document and
+  rotate on an unknown `kid`, but a JWKS outage rejects new asymmetric tokens after the
+  cache expires. Forwarding these lines to the operator's audit sink is deployment work.
 - **Durability is bounded, not guaranteed.** Checkpoints lose at most one interval on a
   hard crash. Terminal writes try the local spool, then the Postgres `turn_outbox`, then the
   shared cache. The local spool is capped at 8 MB; the outbox is durable in Postgres, while
   the cache tier depends on Redis persistence, which is the operator's responsibility. When
   all three are unavailable, `durability_degraded` is set and new prompts are refused with
-  retryable `journal_unavailable` until a write or replay succeeds.
+  retryable `journal_unavailable` until a write or replay succeeds. Outbox depth, oldest
+  age, and dead-letter count are exposed as gauges; dead-letter rows are retained and
+  retried, not deleted.
 - **Metrics are per-replica and bucket-resolution.** Each replica reports its own counters,
   gauges, and cumulative buckets. Prometheus aggregates them; the gateway does not merge
   in-process. Percentiles are interpolated within the fixed bucket layout

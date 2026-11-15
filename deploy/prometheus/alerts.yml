@@ -1,0 +1,123 @@
+groups:
+  - name: cuepilot-availability
+    rules:
+      - alert: CuePilotGatewayDown
+        expr: up{job="cuepilot"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "cuePilot replica is not scrapeable"
+          description: "{{ $labels.instance }} has been down for more than one minute."
+
+      - alert: CuePilotHighTurnErrorRate
+        # The counter family is dynamic: provider_errors_<code>, where code is
+        # rate_limited, provider_unavailable, provider_stream_error, ...
+        expr: |
+          sum(rate({__name__=~"cuepilot_provider_errors_.*"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Provider errors are elevated"
+          description: "More than one provider error every ten seconds over five minutes."
+
+      - alert: CuePilotSlowTimeToFirstToken
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(cuepilot_ttft_ms_bucket[5m]))
+          ) > 2000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 time-to-first-token is above two seconds"
+          description: "TTFT p95 has been above 2s for ten minutes. Check provider latency and retrieval."
+
+  - name: cuepilot-durability
+    rules:
+      - alert: CuePilotJournalDurabilityDegraded
+        expr: sum(increase(cuepilot_session_journal_durability_degraded[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Terminal turns cannot be durably written"
+          description: "The local spool, Postgres outbox, and cache spool all rejected a terminal write. New prompts are refused with journal_unavailable until a write succeeds."
+
+      - alert: CuePilotJournalDrops
+        expr: sum(increase(cuepilot_session_journal_dropped[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Journal writes are being dropped"
+          description: "Checkpoints are droppable, but any drop is worth investigating; terminal turns should spool instead."
+
+      - alert: CuePilotOutboxBacklog
+        expr: cuepilot_outbox_pending > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres outbox is backing up"
+          description: "{{ $value }} terminal turns are waiting in turn_outbox. Replay is not keeping up."
+
+      - alert: CuePilotOutboxAge
+        expr: cuepilot_outbox_oldest_age_s > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oldest outbox row is more than five minutes old"
+          description: "A transcript row has been waiting {{ $value }} seconds. Check Postgres write latency and the journal worker."
+
+      - alert: CuePilotOutboxDeadLetter
+        expr: cuepilot_outbox_dead_letter > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox has rows that keep failing"
+          description: "{{ $value }} rows have reached the dead-letter attempt threshold. They are retained, not deleted; inspect last_error."
+
+  - name: cuepilot-auth-and-limits
+    rules:
+      - alert: CuePilotAuthRejectionSpike
+        expr: sum(rate(cuepilot_auth_rejections[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Authentication rejections are elevated"
+          description: "More than one rejected token per second. Check the auth_rejected audit log for reason and kid."
+
+      - alert: CuePilotJwksRefreshFailing
+        expr: sum(increase(cuepilot_auth_jwks_refresh_errors[10m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "JWKS refresh is failing"
+          description: "The gateway cannot fetch signing keys. New asymmetric tokens will be rejected; existing cached keys continue until TTL."
+
+      - alert: CuePilotRateLimitRejections
+        expr: sum(rate(cuepilot_ws_rejected_rate_limit[10m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clients are being rate limited"
+          description: "More than one rejected connection per second. Check for a reconnect loop or an abusive client."
+
+  - name: cuepilot-token-accounting
+    rules:
+      - alert: CuePilotTokenEstimateDrift
+        expr: abs(cuepilot_token_estimate_mean_abs_error_ratio) > 0.35
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Token estimate is drifting from provider usage"
+          description: "Mean absolute error is above 35% for 30 minutes. The calibrated chars-per-token ratio may not fit the current model."

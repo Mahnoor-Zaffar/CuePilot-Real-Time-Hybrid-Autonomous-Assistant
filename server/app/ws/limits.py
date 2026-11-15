@@ -2,19 +2,23 @@
 
 Three independent limits, because they fail in different ways:
 
-* A **shared connection counter** in the cache caps how often one client may open
-  a socket. It is a *sliding* window (sorted set / monotonic deque), not a fixed
-  bucket, so there is no window boundary to burst across. Redis makes it
-  cross-replica; the in-process fallback makes it per-replica, which is still
-  useful and is reported by `cache.backend`.
+* A **shared connection limiter** in the cache caps how often one client may
+  open a socket. The default is a *sliding* window (sorted set / monotonic
+  deque), not a fixed bucket, so there is no window boundary to burst across.
+  Set `rate_limit_algorithm=token_bucket` for a continuously refilling bucket
+  that permits a short burst up to `rate_limit_bucket_capacity` and then a
+  sustained `rate_limit_bucket_refill_per_s`. Redis makes either cross-replica;
+  the in-process fallback makes it per-replica, which is still useful and is
+  reported by `cache.backend`.
 * A **per-replica connection cap** protects this process's memory and task
   count. `ws_active` is a process gauge, so this cap is intentionally local.
 * A **per-session turn and token budget** bounds how much one conversation may
   spend. Turns are checked at admission, before the provider is called. Tokens
   are recorded from the completed turn's usage, and the remaining budget also
   caps the provider's `max_tokens` and cuts the stream mid-answer when estimated
-  usage crosses it. The estimate is `chars / 4`, so a turn can still overshoot
-  by the estimation error; the cutoff is a bound, not a promise of exactness.
+  usage crosses it. The estimate starts at `chars / 4` and adapts to the
+  provider's reported usage, so a turn can still overshoot by the remaining
+  estimation error; the cutoff is a bound, not a promise of exactness.
 
 Identity defaults to the socket peer. Behind a trusted proxy, either trust the
 left-most `X-Forwarded-For` hop or name a header the proxy rewrites; an
@@ -121,9 +125,16 @@ class ClientLimiter:
         attempts = max(1, self.settings.rate_limit_connect_attempts)
         key = f"cuepilot:ratelimit:connect:{identity}"
         try:
-            allowed, retry_s = await self.cache.window_hit(
-                key, limit=attempts, window_s=window_s
-            )
+            if self.settings.rate_limit_algorithm == "token_bucket":
+                allowed, retry_s = await self.cache.token_bucket(
+                    key,
+                    capacity=max(1, self.settings.rate_limit_bucket_capacity),
+                    refill_per_s=max(0.0, self.settings.rate_limit_bucket_refill_per_s),
+                )
+            else:
+                allowed, retry_s = await self.cache.window_hit(
+                    key, limit=attempts, window_s=window_s
+                )
         except Exception as exc:  # noqa: BLE001 - fail open, but count it
             self.metrics.incr("rate_limit_cache_errors")
             logger.warning("rate limiter cache failed, allowing connection: %s", exc)
@@ -133,10 +144,17 @@ class ClientLimiter:
         if not allowed:
             self.release_reservation()
             self.metrics.incr("ws_rejected_rate_limit")
+            if self.settings.rate_limit_algorithm == "token_bucket":
+                message = (
+                    "connection burst exhausted; sustained rate is "
+                    f"{self.settings.rate_limit_bucket_refill_per_s:g}/s"
+                )
+            else:
+                message = f"more than {attempts} connections in {window_s}s"
             return LimitDecision(
                 False,
                 code="client_rate_limited",
-                message=f"more than {attempts} connections in {window_s}s",
+                message=message,
                 retry_after_ms=max(100, int(math.ceil(retry_s * 1000))),
             )
         return LimitDecision(True, reserved=True)
@@ -145,9 +163,11 @@ class ClientLimiter:
         return {
             "enabled": self.settings.rate_limit_enabled,
             "backend": self.cache.backend,
-            "algorithm": "sliding_window",
+            "algorithm": self.settings.rate_limit_algorithm,
             "window_s": self.settings.rate_limit_window_s,
             "connect_attempts": self.settings.rate_limit_connect_attempts,
+            "bucket_capacity": self.settings.rate_limit_bucket_capacity,
+            "bucket_refill_per_s": self.settings.rate_limit_bucket_refill_per_s,
             "max_connections": self.settings.rate_limit_max_connections,
             "trust_forwarded_for": self.settings.rate_limit_trust_forwarded_for,
             "identity_header": self.settings.rate_limit_identity_header,
@@ -160,9 +180,10 @@ class TurnBudget:
     The turn budget is enforced at admission: cheap, and it stops a loop before
     it reaches the provider. The token budget is enforced twice: `remaining()`
     caps the provider's `max_tokens`, and the agent cuts the stream when its
-    estimated usage crosses the same limit. Because the mid-stream count is an
-    estimate (`chars / 4`, prompt tokens estimated the same way), a turn can
-    still overshoot by the estimation error. That is stated rather than hidden.
+    estimated usage crosses the same limit. The mid-stream count starts at
+    `chars / 4` and adapts to provider-reported usage; a turn can still
+    overshoot by the remaining estimation error. That is stated rather than
+    hidden.
     """
 
     backend = "cache"
@@ -275,5 +296,5 @@ class TurnBudget:
             "session_turns": self.settings.rate_limit_session_turns,
             "session_tokens": self.settings.rate_limit_session_tokens,
             "token_budget": "admission_cap_and_mid_stream_cutoff",
-            "token_estimate": "chars_div_4",
+            "token_estimate": "calibrated_chars_per_token",
         }

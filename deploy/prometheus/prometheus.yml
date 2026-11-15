@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: cuepilot
+    metrics_path: /metrics
+    # Every replica exposes its own snapshot. Use a service discovery mechanism
+    # (Kubernetes SD, Consul, DNS SRV) that returns every pod, not a single
+    # load-balanced VIP: /metrics is per-process, and Prometheus is the
+    # aggregation layer.
+    static_configs:
+      - targets:
+          - gateway:8000
+    # If JWT auth is enabled, /metrics is protected like every other route.
+    # Prefer a file over an inline credential so the token is not committed.
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/gateway-token

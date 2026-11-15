@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app.auth import AuthError, authenticate
+from app.auth import AuthError
 from app.llm.agent import TurnRequest
 from app.ws import protocol
 from app.ws.audio import AudioIngest
@@ -430,7 +430,7 @@ class Connection:
             await self.ws.close()
 
 
-def socket_identity(websocket: WebSocket, runtime: Runtime) -> str | None:
+async def socket_identity(websocket: WebSocket, runtime: Runtime) -> str | None:
     """Authenticate the socket and return the JWT subject, if any.
 
     Raises `AuthError` when authentication is configured and the token is
@@ -439,12 +439,17 @@ def socket_identity(websocket: WebSocket, runtime: Runtime) -> str | None:
     logs; a short-lived token keeps that exposure bounded.
     """
     settings = runtime.settings
-    if settings.auth_jwt_secret:
+    if runtime.jwt.enabled:
         header = websocket.headers.get("authorization")
         if not header:
             supplied = websocket.query_params.get("token")
             header = f"Bearer {supplied}" if supplied else None
-        identity = authenticate(header, settings)
+        identity = await runtime.jwt.authenticate(
+            header,
+            surface="websocket",
+            remote=websocket.client.host if websocket.client else None,
+            path=websocket.url.path,
+        )
         return identity.subject if identity is not None else None
 
     token = settings.api_token
@@ -457,7 +462,7 @@ def socket_identity(websocket: WebSocket, runtime: Runtime) -> str | None:
 
 async def handle_connection(websocket: WebSocket, runtime: Runtime) -> None:
     try:
-        jwt_subject = socket_identity(websocket, runtime)
+        jwt_subject = await socket_identity(websocket, runtime)
     except AuthError as exc:
         await websocket.accept()
         await websocket.send_json(

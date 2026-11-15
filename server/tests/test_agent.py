@@ -71,6 +71,22 @@ async def test_tool_loop_runs_search_then_answers() -> None:
     assert done["usage"]["completion_tokens"] == 8
 
 
+async def test_token_estimate_calibrates_from_provider_usage() -> None:
+    provider = ScriptedProvider([text_turn()])
+    agent, session = await build_agent(provider)
+    frames = await collect(agent, session)
+
+    assert frames[-1]["usage"]["total_tokens"] == 18
+    assert agent.metrics.counters["token_estimate_samples"] == 1
+    assert agent.metrics.counters["token_estimate_abs_error_tokens"] >= 0
+    assert "token_estimate_prompt_ratio" in agent.metrics.gauges
+    assert "token_estimate_completion_ratio" in agent.metrics.gauges
+    assert "token_estimate_mean_abs_error_ratio" in agent.metrics.gauges
+    stats = agent.calibration.stats()
+    assert stats["samples"] == 1
+    assert stats["mean_abs_error_ratio"] is not None
+
+
 async def test_history_is_appended() -> None:
     provider = ScriptedProvider([text_turn()])
     agent, session = await build_agent(provider)

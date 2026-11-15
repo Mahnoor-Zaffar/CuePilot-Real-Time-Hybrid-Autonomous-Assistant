@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.auth import JwtVerifier
 from app.config import Settings
 from app.infra.bus import EventBus, build_bus
 from app.infra.cache import Cache, build_cache
@@ -45,6 +46,7 @@ class Runtime:
     sessions: SessionManager
     limiter: ClientLimiter
     budget: TurnBudget
+    jwt: JwtVerifier
     instance_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     degraded: list[str] = field(default_factory=list)
     seed_info: dict[str, Any] = field(default_factory=dict)
@@ -87,6 +89,7 @@ class Runtime:
         sessions = SessionManager(cache, settings, journal)
         limiter = ClientLimiter(cache, settings, metrics)
         budget = TurnBudget(cache, settings, metrics)
+        jwt = JwtVerifier(settings, metrics)
 
         runtime = cls(
             settings=settings,
@@ -102,6 +105,7 @@ class Runtime:
             sessions=sessions,
             limiter=limiter,
             budget=budget,
+            jwt=jwt,
             degraded=degraded,
         )
         metrics.gauge("ws_active", 0)
@@ -207,6 +211,8 @@ class Runtime:
             ),
             "limits": self.limiter.stats(),
             "budget": self.budget.stats(),
+            "token_estimate": self.agent.calibration.stats(),
+            "auth": self.jwt.stats(),
             "durability": (
                 {
                     "degraded": self.sessions.journal.durability_degraded,

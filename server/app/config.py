@@ -22,16 +22,30 @@ class Settings(BaseSettings):
     env: Literal["dev", "test", "prod"] = "dev"
     log_level: str = "INFO"
     api_token: str | None = None
-    # Optional HS256 JWT verification (stdlib HMAC, no dependency). When
-    # `auth_jwt_secret` is set, HTTP requests and the WebSocket handshake must
-    # carry a valid `Authorization: Bearer <jwt>`; the configured claim becomes
-    # the rate-limit identity. When unset, behaviour is unchanged.
+    # Optional JWT verification. Set either `auth_jwt_secret` (HS256/384/512,
+    # stdlib HMAC) or `auth_jwt_jwks_url` (RS/PS/ES with keys fetched from a
+    # JWKS endpoint). When either is set, HTTP requests and the WebSocket
+    # handshake must carry a valid `Authorization: Bearer <jwt>`; the configured
+    # claim becomes the rate-limit identity. When both are unset, behaviour is
+    # unchanged. Asymmetric verification uses the `cryptography` dependency.
     auth_jwt_secret: str | None = None
-    auth_jwt_algorithms: list[str] = Field(default_factory=lambda: ["HS256"])
+    auth_jwt_jwks_url: str | None = None
+    # JWKS keys are cached for the TTL. An unknown `kid` triggers at most one
+    # refresh per min-refresh interval, so key rotation works without letting a
+    # stream of bogus kids hammer the identity provider. 0 disables the
+    # throttle (tests only).
+    auth_jwt_jwks_cache_ttl_s: int = 300
+    auth_jwt_jwks_min_refresh_s: int = 30
+    auth_jwt_jwks_timeout_s: float = 5.0
+    auth_jwt_algorithms: list[str] = Field(default_factory=lambda: ["HS256", "RS256"])
     auth_jwt_audience: str | None = None
     auth_jwt_issuer: str | None = None
     auth_jwt_identity_claim: str = "sub"
     auth_jwt_leeway_s: int = 30
+    # Rejected handshakes are logged as one structured JSON line (reason,
+    # surface, remote, path, alg, kid) and counted; the token itself is never
+    # logged. Set false only when a proxy already owns the auth audit trail.
+    auth_audit_enabled: bool = True
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
     # ── LLM (OpenRouter speaks the OpenAI chat-completions dialect) ────────
@@ -54,6 +68,10 @@ class Settings(BaseSettings):
     tool_timeout_s: float = 8.0
     mock_token_delay_ms: float = 3.0
     mock_ttft_ms: float = 20.0
+    # The mid-stream token cutoff starts at chars/4 and adapts to the provider's
+    # reported usage. The EWMA smooths one unusual turn; ratios are clamped so
+    # a bad sample cannot make the estimate meaningless.
+    token_estimate_calibration_alpha: float = 0.2
 
     # ── embeddings ─────────────────────────────────────────────────────────
     # auto: hosted embeddings when an OpenAI key is set, otherwise the hash proxy.
@@ -108,8 +126,16 @@ class Settings(BaseSettings):
     # rate_limit_identity_header at a header the proxy strips and rewrites.
     # A header the client can set itself is a spoofable key, not identity.
     rate_limit_enabled: bool = True
+    # sliding_window: no fixed boundary to burst across, a counter over the
+    # window. token_bucket: a stored bucket refills continuously, so a client
+    # can burst up to `rate_limit_bucket_capacity` and then sustains
+    # `rate_limit_bucket_refill_per_s` opens per second. Both are atomic in
+    # Redis and per-replica in the in-process fallback.
+    rate_limit_algorithm: Literal["sliding_window", "token_bucket"] = "sliding_window"
     rate_limit_window_s: int = 60
     rate_limit_connect_attempts: int = 30
+    rate_limit_bucket_capacity: int = 30
+    rate_limit_bucket_refill_per_s: float = 0.5
     rate_limit_max_connections: int = 200
     rate_limit_trust_forwarded_for: bool = False
     rate_limit_identity_header: str | None = None
@@ -141,6 +167,10 @@ class Settings(BaseSettings):
     # still better than dropping the transcript.
     session_journal_spool_cache_ttl_s: int = 3600
     session_journal_spool_retry_s: float = 30.0
+    # A row retried this many times is reported as dead-letter. It is retained
+    # (and retried) rather than deleted: the transcript is worth more than a
+    # tidy queue, but the operator needs to see the poison row.
+    session_journal_outbox_dead_letter_attempts: int = 8
 
     # ── audio ingest ───────────────────────────────────────────────────────
     audio_enabled: bool = True

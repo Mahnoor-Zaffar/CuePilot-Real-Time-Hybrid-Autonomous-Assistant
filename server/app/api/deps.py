@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request, status
 
-from app.auth import AuthError, authenticate
+from app.auth import AuthError
 from app.runtime import Runtime
 
 
@@ -16,15 +16,20 @@ def get_runtime(request: Request) -> Runtime:
 async def require_auth(request: Request) -> None:
     """Optional auth: JWT when configured, otherwise a static bearer token.
 
-    A configured `auth_jwt_secret` makes JWT verification mandatory; there is no
-    fallback to the static token, because a deployment that turned on identity
-    should not silently accept a shared secret instead.
+    A configured JWT secret or JWKS URL makes JWT verification mandatory; there
+    is no fallback to the static token, because a deployment that turned on
+    identity should not silently accept a shared secret instead.
     """
     runtime = get_runtime(request)
     settings = runtime.settings
-    if settings.auth_jwt_secret:
+    if runtime.jwt.enabled:
         try:
-            authenticate(request.headers.get("authorization"), settings)
+            await runtime.jwt.authenticate(
+                request.headers.get("authorization"),
+                surface="http",
+                remote=request.client.host if request.client else None,
+                path=request.url.path,
+            )
         except AuthError as exc:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

@@ -70,6 +70,42 @@ redis.call('PEXPIRE', key, window_ms)
 return amount
 """
 
+# Token bucket: refills continuously, so a client may burst up to `capacity`
+# and then sustains `refill_per_s`. Redis time keeps replicas in agreement.
+_TOKEN_BUCKET_LUA = """
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+local data = redis.call('HMGET', key, 'tokens', 'ts')
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+if not tokens then
+  tokens = capacity
+  ts = now_ms
+end
+local elapsed = math.max(0, now_ms - ts) / 1000
+tokens = math.min(capacity, tokens + elapsed * refill)
+local allowed = 0
+local retry_ms = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+else
+  if refill > 0 then
+    retry_ms = math.ceil((1 - tokens) / refill * 1000)
+  else
+    retry_ms = 60000
+  end
+end
+redis.call('HSET', key, 'tokens', tokens, 'ts', now_ms)
+local ttl_ms = 60000
+if refill > 0 then ttl_ms = math.max(1000, math.ceil(capacity / refill * 1000)) end
+redis.call('PEXPIRE', key, ttl_ms)
+return {allowed, retry_ms}
+"""
+
 
 class Cache(Protocol):
     backend: str
@@ -90,6 +126,16 @@ class Cache(Protocol):
 
     async def window_sum(self, key: str, *, window_s: float) -> float: ...
     async def window_add(self, key: str, *, amount: float, window_s: float) -> None: ...
+    async def token_bucket(
+        self, key: str, *, capacity: float, refill_per_s: float
+    ) -> tuple[bool, float]:
+        """Take one token from a continuously refilling bucket.
+
+        Returns `(allowed, retry_after_s)`. Unlike a sliding window, a bucket
+        permits a burst up to `capacity` and then enforces the sustained rate.
+        """
+        ...
+
     async def close(self) -> None: ...
 
 
@@ -101,6 +147,8 @@ class MemoryCache:
         # Sliding windows are kept separately: entries are (monotonic, amount)
         # and are pruned on read, so an idle key costs nothing after expiry.
         self._windows: dict[str, deque[tuple[float, float]]] = {}
+        # Token buckets are (tokens, last_refill_monotonic).
+        self._buckets: dict[str, tuple[float, float]] = {}
         self._lock = asyncio.Lock()
 
     def _expired(self, key: str) -> bool:
@@ -175,9 +223,27 @@ class MemoryCache:
             entries = self._prune(key, window_s, now)
             entries.append((now, float(amount)))
 
+    # token buckets --------------------------------------------------------
+    async def token_bucket(
+        self, key: str, *, capacity: float, refill_per_s: float
+    ) -> tuple[bool, float]:
+        capacity = max(1.0, float(capacity))
+        refill = max(0.0, float(refill_per_s))
+        async with self._lock:
+            now = time.monotonic()
+            tokens, last = self._buckets.get(key, (capacity, now))
+            tokens = min(capacity, tokens + max(0.0, now - last) * refill)
+            if tokens >= 1.0:
+                self._buckets[key] = (tokens - 1.0, now)
+                return True, 0.0
+            self._buckets[key] = (tokens, now)
+            retry = (1.0 - tokens) / refill if refill > 0 else 60.0
+            return False, retry
+
     async def close(self) -> None:
         self._data.clear()
         self._windows.clear()
+        self._buckets.clear()
 
     async def sweep(self) -> int:
         """Drop expired keys; called periodically by the session sweeper."""
@@ -246,6 +312,18 @@ class RedisCache:
             str(amount),
             f"{amount}:{uuid.uuid4().hex}",
         )
+
+    async def token_bucket(
+        self, key: str, *, capacity: float, refill_per_s: float
+    ) -> tuple[bool, float]:
+        allowed, retry_ms = await self._client.eval(
+            _TOKEN_BUCKET_LUA,
+            1,
+            key,
+            str(max(1.0, float(capacity))),
+            str(max(0.0, float(refill_per_s))),
+        )
+        return bool(int(allowed)), float(retry_ms) / 1000
 
     async def close(self) -> None:
         await self._client.aclose()

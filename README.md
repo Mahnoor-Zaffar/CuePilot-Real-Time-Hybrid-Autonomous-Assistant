@@ -500,11 +500,15 @@ audio capture are real. The rest is scoped on purpose:
 
 | Limit | What that means |
 |---|---|
-| **Bounded operational hardening** | Rate limits are sliding-window with per-session turn/token budgets; the token budget caps `max_tokens` and cuts the stream mid-answer; crash recovery restores a timestamped partial; terminal writes spool to local disk, then the Postgres outbox, then the shared cache, with backpressure when all fail. Details in [known gaps](docs/FAILURE_MODES.md#known-gaps). |
+| **Durability is bounded, not guaranteed** | A hard crash loses at most one checkpoint interval. Terminal turns try the local spool (capped at 8 MB), then the Postgres `turn_outbox`, then the shared cache; the cache tier depends on Redis persistence. When all three reject a write, `durability_degraded` refuses new prompts with retryable `journal_unavailable` until a write or replay succeeds. |
+| **Per-replica connection cap and metrics** | The concurrent connection cap is local because `ws_active` is a process gauge. Rate limiting is shared through Redis when available and per-replica with the in-memory fallback. Metrics are per replica and histogram percentiles are bucket-resolution; Prometheus aggregates scrapes and computes fleet quantiles. |
+| **Token estimates are calibrated, not exact** | The mid-stream cutoff starts at `chars / 4` and adapts to provider-reported usage, but it is still an estimate; the terminal `usage` frame prefers provider numbers. A turn can overshoot the session budget by the residual estimation error. |
 
 The four original operational gaps — per-client rate limiting, partial-turn crash recovery,
-droppable journal writes, per-worker metrics — are closed, including the residual caveats
-that remained after the first pass. The remaining operational bounds are documented in
+droppable journal writes, per-worker metrics — and the follow-up roadmap items are closed:
+Prometheus alert rules plus OTLP export (`deploy/`), outbox depth/age/dead-letter gauges,
+token-estimate calibration, RS256/JWKS auth with rejected-handshake audit logging, and the
+optional token-bucket limiter. The remaining operational bounds are documented in
 [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md#known-gaps).
 
 ---
@@ -515,6 +519,7 @@ that remained after the first pass. The remaining operational bounds are documen
 2. [docs/PROTOCOL.md](docs/PROTOCOL.md) — every frame, ordering guarantees, close codes
 3. [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) — what breaks, how it is detected, what happens
 4. [docs/METRICS.md](docs/METRICS.md) — generated benchmark report
+5. [deploy/README.md](deploy/README.md) — Prometheus scrape config, alert rules, OTLP collector
 
 For a 10-minute review: `server/app/ws/outbound.py`, `server/app/llm/agent.py`,
 `server/app/retrieval/orchestrator.py`, then `desktop/src/useCueStream.ts`.

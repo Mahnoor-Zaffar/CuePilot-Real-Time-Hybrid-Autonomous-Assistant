@@ -64,3 +64,33 @@ async def test_an_empty_window_sums_to_zero(clock: list[float]) -> None:
     cache = MemoryCache()
     assert await cache.window_sum("never-used", window_s=60) == 0.0
     await cache.close()
+
+
+async def test_token_bucket_allows_a_burst_then_refills_continuously(
+    clock: list[float],
+) -> None:
+    cache = MemoryCache()
+
+    assert (await cache.token_bucket("b", capacity=2, refill_per_s=0.5))[0] is True
+    assert (await cache.token_bucket("b", capacity=2, refill_per_s=0.5))[0] is True
+
+    allowed, retry = await cache.token_bucket("b", capacity=2, refill_per_s=0.5)
+    assert allowed is False
+    assert 1.9 <= retry <= 2.0
+
+    # Half a token after one second is still not enough; two seconds is.
+    clock[0] += 1.0
+    assert (await cache.token_bucket("b", capacity=2, refill_per_s=0.5))[0] is False
+    clock[0] += 1.0
+    assert (await cache.token_bucket("b", capacity=2, refill_per_s=0.5))[0] is True
+    await cache.close()
+
+
+async def test_token_bucket_never_exceeds_capacity(clock: list[float]) -> None:
+    cache = MemoryCache()
+    assert (await cache.token_bucket("b", capacity=1, refill_per_s=100))[0] is True
+    clock[0] += 60
+    # A long idle period refills to capacity, not beyond it.
+    assert (await cache.token_bucket("b", capacity=1, refill_per_s=100))[0] is True
+    assert (await cache.token_bucket("b", capacity=1, refill_per_s=100))[0] is False
+    await cache.close()

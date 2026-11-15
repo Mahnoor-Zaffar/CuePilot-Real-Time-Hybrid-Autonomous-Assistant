@@ -246,6 +246,54 @@ async def test_a_failed_terminal_write_is_spooled_for_later(tmp_path: Path) -> N
     assert journal._spool.spooled >= 1
 
 
+async def test_outbox_depth_age_and_dead_letter_are_observable() -> None:
+    journal, pool = make_journal(session_journal_outbox_dead_letter_attempts=8)
+    pool.conn.row = {
+        "pending": 3,
+        "oldest_age_s": 42.5,
+        "dead_letter": 1,
+        "max_attempts": 9,
+    }
+
+    await journal._refresh_outbox_metrics()
+
+    outbox = journal.stats()["durability"]["outbox"]
+    assert outbox["pending"] == 3
+    assert outbox["oldest_age_s"] == 42.5
+    assert outbox["dead_letter"] == 1
+    assert outbox["max_attempts"] == 9
+    assert outbox["dead_letter_attempts"] == 8
+    assert journal._metrics.gauges["outbox_pending"] == 3
+    assert journal._metrics.gauges["outbox_oldest_age_s"] == 42.5
+    assert journal._metrics.gauges["outbox_dead_letter"] == 1
+
+
+async def test_a_failed_outbox_probe_does_not_reset_the_metrics() -> None:
+    class BrokenPool(FakePool):
+        class _Conn(FakeConnection):
+            async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
+                raise ConnectionError("postgres went away")
+
+        def __init__(self) -> None:
+            self.conn = self._Conn()
+
+    journal = TurnJournal(  # type: ignore[arg-type]
+        BrokenPool(), make_settings(), Metrics()
+    )
+    journal._outbox_snapshot = {
+        "pending": 7,
+        "oldest_age_s": 12.0,
+        "dead_letter": 2,
+        "max_attempts": 9,
+        "refreshed_at": 1.0,
+    }
+
+    await journal._refresh_outbox_metrics()
+
+    assert journal.stats()["durability"]["outbox"]["pending"] == 7
+    assert journal._metrics.counters["session_journal_outbox_stats_errors"] == 1
+
+
 async def test_a_terminal_turn_falls_back_to_the_durable_outbox() -> None:
     # No local spool path and no cache: the Postgres outbox is the last
     # durable tier before the transcript is dropped.

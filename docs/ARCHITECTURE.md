@@ -34,7 +34,7 @@ Non-goals: multi-tenant authz, model fine-tuning.
 │                                                                                       │
 │  Connection (ws/connection.py)                                                        │
 │    ├── handshake + auth + heartbeat + close codes                                     │
-│    ├── ClientLimiter (ws/limits.py): shared attempt window + per-replica cap          │
+│    ├── ClientLimiter (ws/limits.py): shared window/bucket + per-replica cap           │
 │    ├── OutboundStream (ws/outbound.py): per-turn buffers, 16 ms flush, bounded queue  │
 │    └── SessionManager (ws/session.py): hot dict + Redis mirror + Postgres journal     │
 │                                                                                       │
@@ -226,19 +226,40 @@ Auth is optional and has two mutually exclusive modes:
 
 - **Static token** (`api_token`): REST requires `Authorization: Bearer <token>`, and the
   WebSocket accepts `?token=<token>` because browsers cannot set headers on a WS handshake.
-- **JWT** (`auth_jwt_secret`): when set, it takes precedence over the static token. The
-  gateway verifies HS256/HS384/HS512 tokens itself using `hmac` from the standard library —
-  no JWT dependency. Only HMAC algorithms are accepted: `alg: none` and asymmetric
-  algorithms are rejected rather than trusted without a key-management story. Verification
-  checks the signature in constant time, `exp`/`nbf` with `auth_jwt_leeway_s`, optional
-  `aud`/`iss`, and that the identity claim (`sub` by default) is a non-empty string.
+- **JWT** (`auth_jwt_secret` or `auth_jwt_jwks_url`): when set, it takes precedence over
+  the static token. A single `JwtVerifier` (`runtime.jwt`) is shared by REST and the socket
+  handshake and supports two key modes:
+  - **HMAC** (`auth_jwt_secret`): HS256/HS384/HS512 via `hmac` from the standard library.
+  - **Asymmetric** (`auth_jwt_jwks_url`): RS/PS/ES tokens verified against a JWKS document
+    with `cryptography`. Keys are cached by `kid` for `auth_jwt_jwks_cache_ttl_s`; an
+    unknown `kid` triggers at most one refresh per `auth_jwt_jwks_min_refresh_s`, so
+    rotation works without letting bogus kids hammer the identity provider.
+
+  Algorithm confusion is rejected by construction: HMAC verification only uses the shared
+  secret, asymmetric verification only uses a public key from the JWKS document, and
+  `alg: none` is never accepted. Verification checks the signature (constant-time for
+  HMAC), `exp`/`nbf` with `auth_jwt_leeway_s`, optional `aud`/`iss`, and that the identity
+  claim (`sub` by default) is a non-empty string.
 
 The verified claim is the **rate-limit identity**, so two clients behind one NAT get
 separate buckets. Without JWT the identity falls back to the socket peer, or to a
 `rate_limit_identity_header` / `X-Forwarded-For` hop when the operator explicitly trusts a
 proxy. A trusted header is an operator contract, not authentication; anyone who can reach
 the port can spoof it. Authentication has no fail-open path: an invalid token is a 401 on
-REST and a `4401` close on the socket.
+REST and a `4401` close on the socket. A JWKS outage is a rejection, not a pass: after the
+cached keys expire, new asymmetric tokens fail closed.
+
+Every rejection increments `auth_rejections` (and `auth_rejections_<reason>`) and, when
+`auth_audit_enabled` is true, writes one structured JSON line:
+
+```json
+{"event":"auth_rejected","surface":"websocket","reason":"token_expired",
+ "remote":"203.0.113.9","path":"/ws/stream","alg":"RS256","kid":"key-2",
+ "token_present":true,"token_len":812,"ts":1710000000.0}
+```
+
+The token itself is never logged. The reason separates an expired token from a rotation
+problem (`unknown_key`), a bad signature, or an algorithm that is not allowed.
 
 ## Sessions and resume
 
@@ -379,8 +400,25 @@ identities and derived cache hit rate. Counters of note: `delta_frames_sent`,
 `rate_limit_cache_errors`, `turn_checkpoints_dropped`, `session_journal_spooled`,
 `session_journal_replayed`, `session_journal_outboxed`, `session_journal_outbox_replayed`,
 `session_journal_cache_spooled`, `session_journal_cache_replayed`,
-`session_journal_durability_degraded`, `turns_rejected_turn_budget`,
-`turns_rejected_token_budget`, `turns_rejected_journal_unavailable`.
+`session_journal_durability_degraded`, `session_journal_outbox_stats_errors`,
+`turns_rejected_turn_budget`, `turns_rejected_token_budget`,
+`turns_rejected_journal_unavailable`, `auth_rejections` (plus a
+`auth_rejections_<reason>` counter), `auth_jwks_refreshed`, `auth_jwks_refresh_errors`,
+`token_estimate_samples`, `token_estimate_abs_error_tokens`,
+`token_estimate_overestimates`, `token_estimate_underestimates`.
+
+Durability gauges are refreshed on the journal replay cadence
+(`session_journal_spool_retry_s`) and once at startup, not per request:
+`outbox_pending`, `outbox_oldest_age_s`, `outbox_dead_letter`, `outbox_max_attempts`.
+A failed probe keeps the previous snapshot and increments
+`session_journal_outbox_stats_errors`, so a broken Postgres does not make the outbox look
+empty. Dead-letter rows are retained and retried, not deleted: the transcript matters more
+than a tidy queue.
+
+Token-estimate gauges (`token_estimate_prompt_ratio`, `token_estimate_completion_ratio`,
+`token_estimate_mean_abs_error_ratio`, `token_estimate_bias_ratio`) expose the calibrated
+`chars -> tokens` ratio and its observed error. The ratio starts at `chars / 4` and is an
+EWMA of provider-reported usage; provider usage always wins in the terminal `usage` frame.
 
 Metrics are **per replica**. `/metrics` renders this process in Prometheus text format;
 Prometheus scrapes every replica and is the aggregation layer. The gateway deliberately
@@ -449,12 +487,16 @@ OTel disabled-by-export.
   cache. The cache fallback depends on Redis persistence; the outbox does not. At scale the
   `turns` table needs partitioning by session and age, and the journal should stream to an
   analytics sink rather than being read back one session at a time.
-- **Bounded rate limiting.** Sliding-window counters plus a per-replica socket cap, plus
-  per-session turn and token budgets. The token budget caps the provider's `max_tokens` and
-  cuts the stream mid-answer when estimated usage crosses it; because the count is an
-  estimate (`chars / 4`), a turn can still overshoot by the estimation error. Identity is a
-  verified JWT subject when auth is configured, otherwise the socket peer or an
-  operator-trusted header. At scale, push to a real rate-limit backend.
+- **Bounded rate limiting.** Connection opens use a sliding-window counter by default, or
+  an optional continuously refilling token bucket (`rate_limit_algorithm=token_bucket`)
+  that permits a burst up to `rate_limit_bucket_capacity` and then a sustained
+  `rate_limit_bucket_refill_per_s`. Both are atomic in Redis and per-replica with the
+  in-memory fallback. A per-replica socket cap and per-session turn/token budgets bound
+  the rest. The token budget caps the provider's `max_tokens` and cuts the stream
+  mid-answer when the calibrated estimate crosses it; because the count is still an
+  estimate, a turn can overshoot by the residual error. Identity is a verified JWT subject
+  when auth is configured, otherwise the socket peer or an operator-trusted header. At
+  scale, push to a real rate-limit backend.
 - **No cross-encoder rerank.** RRF is cheap and robust; a reranker would improve precision
   on a larger corpus at the cost of a second model call.
 - **Single active turn per session.** Simplifies cancellation and ordering. Concurrent

@@ -216,6 +216,28 @@ async def test_connection_limit_is_a_sliding_window_not_a_fixed_bucket() -> None
     await cache.close()
 
 
+async def test_connection_limit_can_use_a_token_bucket() -> None:
+    cache = MemoryCache()
+    limiter = ClientLimiter(
+        cache,
+        make_settings(
+            rate_limit_algorithm="token_bucket",
+            rate_limit_bucket_capacity=1,
+            rate_limit_bucket_refill_per_s=0.001,
+        ),
+        Metrics(),
+    )
+
+    assert (await limiter.admit("a")).allowed is True
+    limiter.release_reservation()
+    denied = await limiter.admit("a")
+    assert denied.allowed is False
+    assert denied.code == "client_rate_limited"
+    assert denied.retry_after_ms and denied.retry_after_ms >= 100
+    assert limiter.stats()["algorithm"] == "token_bucket"
+    await cache.close()
+
+
 def test_identity_header_is_used_only_when_configured() -> None:
     class FakeSocket:
         headers = {"x-client-id": "tenant-7", "x-forwarded-for": "203.0.113.9, 10.0.0.1"}

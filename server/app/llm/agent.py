@@ -17,22 +17,13 @@ from typing import Any, Protocol
 
 from app.config import Settings
 from app.llm.base import ChatMessage, ChatProvider, ProviderError, ToolCall
+from app.llm.tokens import TokenCalibration
 from app.llm.tools import ToolContext, ToolRegistry, ToolResult
 from app.retrieval.orchestrator import HybridRetriever
 from app.telemetry.metrics import Metrics
 from app.telemetry.otel import TraceRecorder
 
 logger = logging.getLogger(__name__)
-
-
-def _estimate_tokens(text: str) -> int:
-    """Cheap token estimate: four characters per token.
-
-    Used only for the mid-stream budget cutoff. Provider-reported usage wins
-    whenever it arrives; this is a bound on how much text to stream, not a
-    replacement for accounting.
-    """
-    return max(0, (len(text) + 3) // 4)
 
 
 SYSTEM_PROMPT = """You are CuePilot, a real-time desktop copilot for engineers.
@@ -99,7 +90,13 @@ class _TurnState:
     tool_iterations: int = 0
     budget_cutoff: bool = False
     generated_chars: int = 0
+    prompt_chars: int = 0
     prompt_tokens_est: int = 0
+    # Prompt chars/estimate summed across every provider call in this turn
+    # (tool iterations add messages). Provider usage aggregates the same way.
+    calibration_prompt_chars: int = 0
+    calibration_prompt_est: int = 0
+    provider_usage: bool = False
 
 
 class Agent:
@@ -118,6 +115,7 @@ class Agent:
         self.settings = settings
         self.metrics = metrics
         self.recorder = recorder
+        self.calibration = TokenCalibration(alpha=settings.token_estimate_calibration_alpha)
 
     async def run(self, request: TurnRequest, session: SessionLike) -> AsyncIterator[dict]:
         started = time.perf_counter()
@@ -203,15 +201,19 @@ class Agent:
             session_id=session.id, turn_id=request.turn_id, scratchpad=session.scratchpad
         )
 
+        # The calibrated estimate is used both for the admission budget and the
+        # mid-stream cutoff. It starts at chars/4 and adapts to provider usage.
+        state.prompt_chars = sum(len(message.content or "") for message in messages)
+        state.prompt_tokens_est = sum(
+            self.calibration.estimate_prompt(message.content or "") for message in messages
+        )
+
         # Subtract the prompt estimate from the remaining session budget. What
         # is left is the generation budget: it caps `max_tokens` and is the
         # mid-stream cutoff. An exhausted budget ends the turn before the
         # provider is called.
         generation_limit: int | None = None
         if request.token_limit is not None:
-            state.prompt_tokens_est = sum(
-                _estimate_tokens(message.content or "") for message in messages
-            )
             generation_limit = max(0, request.token_limit - state.prompt_tokens_est)
             if generation_limit <= 0:
                 state.finish_reason = "token_budget"
@@ -228,6 +230,11 @@ class Agent:
             state.tool_iterations = iteration
             calls: list[ToolCall] = []
             assistant_text = ""
+            prompt_texts = [message.content or "" for message in messages]
+            state.calibration_prompt_chars += sum(len(text) for text in prompt_texts)
+            state.calibration_prompt_est += sum(
+                self.calibration.estimate_prompt(text) for text in prompt_texts
+            )
             stream = self.provider.stream(
                 messages,
                 tools=tool_schemas,
@@ -246,7 +253,8 @@ class Agent:
                         yield {"type": "delta", "turn_id": request.turn_id, "text": event.text}
                         if (
                             generation_limit is not None
-                            and state.generated_chars / 4 >= generation_limit
+                            and self.calibration.estimate_completion(state.generated_chars)
+                            >= generation_limit
                         ):
                             # Stop producing text instead of paying for the rest
                             # of the answer. Closing the provider stream is what
@@ -258,6 +266,8 @@ class Agent:
                         calls = event.tool_calls
                     elif event.kind == "usage":
                         state.usage.add(event.usage)
+                        if event.usage and int(event.usage.get("total_tokens", 0)) > 0:
+                            state.provider_usage = True
                     elif event.kind == "finish":
                         state.finish_reason = event.finish_reason or "stop"
             except ProviderError as exc:
@@ -343,13 +353,18 @@ class Agent:
         usage = state.usage.as_dict()
         if state.budget_cutoff:
             # The provider may not report usage for a stream we closed early.
-            # Record the estimate so the budget reflects what was spent.
+            # Record the calibrated estimate so the budget reflects what was
+            # spent. This is an estimate, not provider accounting.
             if usage["prompt_tokens"] <= 0:
                 usage["prompt_tokens"] = state.prompt_tokens_est
             if usage["completion_tokens"] <= 0:
-                usage["completion_tokens"] = state.generated_chars // 4
+                usage["completion_tokens"] = self.calibration.estimate_completion(
+                    state.generated_chars
+                )
             if usage["total_tokens"] <= 0:
                 usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        if state.provider_usage and not state.budget_cutoff:
+            self._record_token_calibration(state, usage)
         return {
             "type": "done",
             "turn_id": request.turn_id,
@@ -360,6 +375,48 @@ class Agent:
             "tool_iterations": state.tool_iterations,
             "model": self.provider.model,
         }
+
+    def _record_token_calibration(self, state: _TurnState, usage: dict[str, int]) -> None:
+        """Compare this turn's estimate with provider usage and adapt.
+
+        Only provider-reported usage feeds the ratio. A turn cut off by the
+        budget has no trustworthy usage, so its estimate is used for the wire
+        frame but never for calibration.
+        """
+        actual_total = int(usage.get("total_tokens", 0))
+        if actual_total <= 0:
+            actual_total = int(usage.get("prompt_tokens", 0)) + int(
+                usage.get("completion_tokens", 0)
+            )
+        if actual_total <= 0:
+            return
+        estimated_total = state.calibration_prompt_est + self.calibration.estimate_completion(
+            state.generated_chars
+        )
+        error = estimated_total - actual_total
+        self.calibration.observe(
+            prompt_chars=state.calibration_prompt_chars,
+            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+            completion_chars=state.generated_chars,
+            completion_tokens=int(usage.get("completion_tokens", 0)),
+            estimated_tokens=estimated_total,
+            actual_tokens=actual_total,
+        )
+        self.metrics.incr("token_estimate_samples")
+        self.metrics.incr("token_estimate_abs_error_tokens", abs(error))
+        if error > 0:
+            self.metrics.incr("token_estimate_overestimates")
+        elif error < 0:
+            self.metrics.incr("token_estimate_underestimates")
+        self.metrics.gauge("token_estimate_prompt_ratio", self.calibration.prompt_ratio)
+        self.metrics.gauge(
+            "token_estimate_completion_ratio", self.calibration.completion_ratio
+        )
+        self.metrics.gauge(
+            "token_estimate_mean_abs_error_ratio",
+            self.calibration.mean_abs_error_ratio or 0.0,
+        )
+        self.metrics.gauge("token_estimate_bias_ratio", self.calibration.bias_ratio or 0.0)
 
     def _build_messages(
         self, request: TurnRequest, session: SessionLike, context: str

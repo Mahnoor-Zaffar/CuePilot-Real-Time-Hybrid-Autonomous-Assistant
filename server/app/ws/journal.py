@@ -123,6 +123,19 @@ SET attempts = attempts + 1, last_error = $3, updated_at = now()
 WHERE session_id = $1 AND turn_id = $2
 """
 
+# Observability, not control. The oldest age is the signal that replay is not
+# keeping up; dead-letter counts rows that have failed repeatedly. They are
+# retained and retried: dropping a transcript row to make a gauge look clean
+# would trade the thing we are protecting for the thing measuring it.
+_OUTBOX_STATS = """
+SELECT
+    count(*) AS pending,
+    COALESCE(EXTRACT(EPOCH FROM (now() - min(created_at))), 0) AS oldest_age_s,
+    count(*) FILTER (WHERE attempts >= $1) AS dead_letter,
+    COALESCE(max(attempts), 0) AS max_attempts
+FROM turn_outbox
+"""
+
 _OUTBOX_REPLAY_BATCH = 100
 
 
@@ -315,6 +328,15 @@ class TurnJournal:
         self.outbox_replayed = 0
         self.cache_spooled = 0
         self.cache_replayed = 0
+        # Last observed outbox depth. The replay loop refreshes it; health and
+        # stats read the snapshot instead of querying Postgres per probe.
+        self._outbox_snapshot: dict[str, Any] = {
+            "pending": 0,
+            "oldest_age_s": 0.0,
+            "dead_letter": 0,
+            "max_attempts": 0,
+            "refreshed_at": None,
+        }
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -325,6 +347,7 @@ class TurnJournal:
         # disabled: the outbox is still a fallback tier for terminal writes.
         if self._spool_task is None:
             self._spool_task = asyncio.create_task(self._spool_loop(), name="journal-spool")
+        await self._refresh_outbox_metrics()
 
     async def stop(self) -> None:
         if self._worker is None:
@@ -508,6 +531,7 @@ class TurnJournal:
             written = await self._replay_spool_locked()
             written += await self._replay_outbox_locked()
             written += await self._replay_cache_spool_locked()
+            await self._refresh_outbox_metrics()
             if written:
                 self._note_durable()
             return written
@@ -544,6 +568,42 @@ class TurnJournal:
             self._spool.append(record)
         await asyncio.to_thread(self._spool.remove, replay_path)
         return written
+
+    async def _refresh_outbox_metrics(self) -> None:
+        """Refresh the outbox depth/age snapshot and process gauges.
+
+        Runs on the replay cadence and once at startup, so a health probe does
+        not turn into a Postgres query per request. A failed probe leaves the
+        previous snapshot in place and counts the error; it must not make the
+        journal look healthy by resetting the gauges to zero.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                row = await asyncio.wait_for(
+                    conn.fetchrow(
+                        _OUTBOX_STATS,
+                        max(1, self._settings.session_journal_outbox_dead_letter_attempts),
+                    ),
+                    timeout=self._settings.session_journal_timeout_s,
+                )
+        except Exception as exc:  # noqa: BLE001 - observability must not break replay
+            self._metrics.incr("session_journal_outbox_stats_errors")
+            logger.warning("outbox stats probe failed: %s", exc)
+            return
+        if row is None:
+            return
+        snapshot = {
+            "pending": int(row.get("pending", 0) or 0),
+            "oldest_age_s": round(float(row.get("oldest_age_s", 0) or 0), 1),
+            "dead_letter": int(row.get("dead_letter", 0) or 0),
+            "max_attempts": int(row.get("max_attempts", 0) or 0),
+            "refreshed_at": time.time(),
+        }
+        self._outbox_snapshot = snapshot
+        self._metrics.gauge("outbox_pending", snapshot["pending"])
+        self._metrics.gauge("outbox_oldest_age_s", snapshot["oldest_age_s"])
+        self._metrics.gauge("outbox_dead_letter", snapshot["dead_letter"])
+        self._metrics.gauge("outbox_max_attempts", snapshot["max_attempts"])
 
     async def _replay_outbox_locked(self) -> int:
         """Drain the durable outbox into `turns`, oldest first.
@@ -821,6 +881,10 @@ class TurnJournal:
                     "table": "turn_outbox",
                     "spooled": self.outboxed,
                     "replayed": self.outbox_replayed,
+                    "dead_letter_attempts": (
+                        self._settings.session_journal_outbox_dead_letter_attempts
+                    ),
+                    **self._outbox_snapshot,
                 },
                 "cache_spool": {
                     "backend": self._cache.backend if self._cache is not None else None,
