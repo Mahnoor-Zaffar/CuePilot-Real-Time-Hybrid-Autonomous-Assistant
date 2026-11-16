@@ -1,0 +1,41 @@
+#!/bin/sh
+# Opt-in commit attribution.
+#
+#   make hooks
+#   git config cuepilot.coauthor "cuePilot Agent <12345678+cuepilot-agent@users.noreply.github.com>"
+#
+# The hook appends the configured Co-authored-by trailer only when the message
+# already carries the marker
+#
+#   Assisted-by: OpenCode
+#
+# so a commit the agent did not touch stays attributed to its author. The
+# trailer email must belong to a real GitHub account; do not point it at
+# someone else's identity.
+set -eu
+
+message_file=${1:?prepare-commit-msg: missing commit message file}
+
+identity=$(git config --get cuepilot.coauthor || true)
+[ -n "$identity" ] || exit 0
+
+grep -qi '^Assisted-by:[[:space:]]*OpenCode' "$message_file" || exit 0
+
+# Already attributed by a human or a previous run: leave the message alone.
+if grep -qi '^Co-authored-by:' "$message_file"; then
+    exit 0
+fi
+
+# Drop trailing blank lines so the new trailer joins the marker's trailer
+# block instead of starting a new paragraph. Rewrite in place: git hands us a
+# path inside .git and reads it back after the hook returns.
+staged="$message_file.cuepilot"
+awk '{ line[NR] = $0 }
+     END {
+         last = NR
+         while (last > 0 && line[last] ~ /^[[:space:]]*$/) last--
+         for (i = 1; i <= last; i++) print line[i]
+     }' "$message_file" >"$staged"
+printf 'Co-authored-by: %s\n' "$identity" >>"$staged"
+cat "$staged" >"$message_file"
+rm -f "$staged"

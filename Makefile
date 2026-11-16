@@ -10,8 +10,8 @@ PIP := server/.venv/bin/pip
 RUFF := server/.venv/bin/ruff
 UVICORN := server/.venv/bin/uvicorn
 
-.PHONY: help setup setup-server setup-desktop setup-tools up down logs migrate dev server desktop test \
-        test-local lint typecheck build docs-check bench bench-semantic seed metrics measure-idle \
+.PHONY: help setup setup-server setup-desktop setup-tools hooks up down logs migrate dev server desktop test \
+        test-local lint typecheck build docs-check hooks-check bench bench-semantic seed metrics measure-idle \
         check clean
 
 help: ## Show available targets
@@ -32,6 +32,12 @@ setup-desktop: ## Install desktop dependencies
 
 setup-tools: ## Install repository tooling (documentation gate)
 	npm install
+
+hooks: ## Enable the opt-in commit attribution hook (this clone only)
+	git config core.hooksPath .githooks
+	chmod +x .githooks/prepare-commit-msg
+	@echo "hooks enabled; set the co-author identity with:"
+	@echo "  git config cuepilot.coauthor \"Name <id+login@users.noreply.github.com>\""
 
 # ── infrastructure ───────────────────────────────────────────────────────────
 up: ## Start Postgres (pgvector) and Redis
@@ -84,7 +90,10 @@ build: ## Build the desktop production bundle
 docs-check: ## Validate mermaid diagrams and relative links in docs
 	npm run check:docs
 
-check: lint typecheck test docs-check ## Lint, typecheck, test, and check docs
+hooks-check: ## Prove the attribution hook in a throwaway repo
+	sh scripts/test-git-hooks.sh
+
+check: lint typecheck test docs-check hooks-check ## Lint, typecheck, test, check docs and hooks
 
 # ── metrics ──────────────────────────────────────────────────────────────────
 bench: ## Regenerate docs/metrics.json (retrieval, TTFT, coalescing, bundle, idle)
