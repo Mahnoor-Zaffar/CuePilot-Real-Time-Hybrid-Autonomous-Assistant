@@ -17,7 +17,7 @@ rate-limit, caches go stale, and a socket dies mid-sentence. This repo treats th
 product, not as edge cases.
 
 ```
-156 tests · ruff clean · tsc clean · renderer 253 KiB / 78 KiB gzip
+183 tests + 15 service-gated · ruff clean · tsc clean · renderer 253 KiB / 78 KiB gzip
 ```
 
 ---
@@ -355,11 +355,12 @@ an embedding-width rebuild leaves the turn history intact. Run it as its own ste
 ## Quality gates
 
 ```bash
-make check        # ruff + tsc (renderer and electron) + 155 tests + docs gate
+make check        # ruff + tsc (renderer, electron, e2e) + 183 tests (+15 service-gated) + docs gate
 make test-local   # real semantic embedder tests (needs: cd server && uv sync --extra local)
 make migrate      # apply SQL migrations without booting the gateway
 make bench        # regenerate docs/metrics.json and docs/METRICS.md
 make measure-idle # desktop idle footprint -> desktop/bench/idle.json
+make e2e          # production Electron build against a real gateway on :8000
 make metrics      # measure-idle, then bench
 ```
 
@@ -370,7 +371,8 @@ Python 3.11 and 3.12 against the locked `uv.lock`, a migration job against a rea
 journal round-trip and a transcript surviving an embedding-width rebuild),
 a job that installs the `local` extra and exercises the real semantic embedder, the
 renderer typecheck and production build on Node 22 (plus a smoke check of the system-audio
-capability policy), and a docs gate that parses every
+capability policy), a desktop end-to-end job that starts a mock gateway and drives the
+production Electron build under `xvfb-run`, and a docs gate that parses every
 Mermaid diagram and resolves every relative link. `scripts/check-docs.mjs` uses mermaid's
 own grammar under jsdom, so a broken diagram fails the build instead of shipping as a
 broken image.
@@ -392,6 +394,7 @@ runs on every invocation and health correctly reports `degraded`.
 | WebSocket | Handshake, abort, reconnect + history replay, unknown session, bad frame, audio ack, auth, rate limit, per-replica cap, limiter fail-open |
 | Journal | Queue drops, checkpoint replacement, stale-turn recovery, terminal spool + replay, write retry/failure counters, cache-miss recovery, Postgres round-trip, orphan turn insert |
 | API | Health (limits + journal), search, ingest + invalidation, metrics/traces after a turn, cross-replica merge semantics |
+| Desktop | Production Electron build against a real gateway: connect, streamed answer + retrieval sources, New session, hotkey IPC into the draft, preload guards, audio capability report |
 
 ---
 
@@ -436,17 +439,18 @@ server/
     api/          health · KB ingest/search/stats · metrics · traces
   bench/          reproducible harness · 100 labelled queries · bootstrap stats · opt-in BEIR subset
   scripts/        migrate.py (apply schema without booting)
-  tests/          140 tests
+  tests/          server suite: 183 run, 15 service-gated
   Dockerfile      multi-stage image, 82 MB, unprivileged, healthchecked
 desktop/
   src/            React UI + useCueStream (the entire client transport)
   electron/       main process (hotkeys, clipboard, CSP, display-media audio) + preload
+  e2e/            Playwright: production Electron build against a real gateway
   scripts/        measure-idle.cjs · check-audio.cjs
 docs/             architecture · protocol · failure modes · generated metrics
 scripts/          check-docs.mjs (mermaid + link gate) · test-git-hooks.sh
 .githooks/        opt-in prepare-commit-msg attribution hook (`make hooks`)
 CONTRIBUTING.md   setup · commit style · attribution · PR flow
-.github/          CI (server matrix · migrations · local embedder · redis · prometheus · desktop · docs · hook) and release
+.github/          CI (server matrix · migrations · local embedder · redis · prometheus · desktop · desktop e2e · docs · hook) and release
 ```
 
 ---

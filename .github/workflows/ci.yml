@@ -196,6 +196,52 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  desktop-e2e:
+    name: desktop · e2e
+    runs-on: ubuntu-24.04
+    env:
+      # The workflow default skips the Electron download; this job needs it.
+      # Empty (not "0") because Electron tests the variable for truthiness.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      # Playwright's webServer starts the gateway with the mock provider, hash
+      # embedder and in-memory stores, so the desktop talks to a real socket
+      # without any external service.
+      - name: Sync server dependencies
+        working-directory: server
+        run: uv sync --frozen --extra dev --python 3.12
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: End-to-end (real gateway, real Electron)
+        working-directory: desktop
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" npm run e2e
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-e2e-artifacts
+          path: |
+            desktop/test-results
+            desktop/playwright-report
+          retention-days: 7
+
   docs:
     name: docs · diagrams + links
     runs-on: ubuntu-24.04

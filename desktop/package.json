@@ -12,7 +12,8 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run build:electron && vite build",
     "package:mac": "npm run build && electron-builder --mac --publish never",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json && tsc --noEmit -p tsconfig.e2e.json",
+    "e2e": "npm run build && playwright test",
     "check:audio": "node scripts/check-audio.cjs",
     "start": "electron .",
     "measure-idle": "electron scripts/measure-idle.cjs"
@@ -22,6 +23,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
