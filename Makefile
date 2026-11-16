@@ -11,7 +11,7 @@ RUFF := server/.venv/bin/ruff
 UVICORN := server/.venv/bin/uvicorn
 
 .PHONY: help setup setup-server setup-desktop setup-tools hooks up down logs migrate dev server desktop test \
-        test-local lint typecheck build docs-check hooks-check bench bench-semantic seed metrics measure-idle \
+        test-local test-redis lint typecheck build docs-check hooks-check bench bench-semantic seed metrics measure-idle \
         check clean
 
 help: ## Show available targets
@@ -77,6 +77,10 @@ test: ## Run the server test suite
 
 test-local: ## Run the local semantic embedder tests (needs: uv sync --extra local)
 	cd server && .venv/bin/python -m pytest -q -m local
+
+test-redis: ## Redis integration tests (needs: make up)
+	cd server && CUEPILOT_TEST_REDIS_URL=$${CUEPILOT_TEST_REDIS_URL:-redis://127.0.0.1:6380/0} \
+		.venv/bin/python -m pytest -q tests/test_cache_redis.py
 
 lint: ## Ruff lint
 	cd server && .venv/bin/ruff check .

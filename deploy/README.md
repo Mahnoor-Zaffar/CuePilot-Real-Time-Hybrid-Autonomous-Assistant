@@ -24,6 +24,11 @@ durability degradation, journal drops, outbox depth/age/dead-letter, auth
 rejection spikes, JWKS refresh failure, rate-limit rejections, and token
 estimate drift.
 
+The rules are checked twice in CI: `promtool` validates PromQL syntax and the
+scrape config, and `server/tests/test_alerts.py` asserts that every
+`cuepilot_*` series a rule names is one the gateway actually emits. The second
+check is the one that catches a rule which is valid PromQL but can never fire.
+
 The outbox gauges are refreshed on the journal replay cadence
 (`CUEPILOT_SESSION_JOURNAL_SPOOL_RETRY_S`, default 30 s) and once at startup, so
 a health probe does not issue a Postgres query per request. A failed probe
