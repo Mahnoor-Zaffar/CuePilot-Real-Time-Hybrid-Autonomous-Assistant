@@ -11,13 +11,20 @@ make dev        # gateway on :8000 and the Electron client
 
 `make check` is the gate: ruff, desktop typecheck, server tests, the docs
 link/mermaid check, and the commit-hook test. CI adds the Postgres migration,
-local-embedder, Redis integration, and `promtool` jobs. Those need real
-services, so they are opt-in locally:
+local-embedder, Redis integration, `promtool`, and desktop end-to-end jobs.
+Those need real services or a display, so they are opt-in locally:
 
 ```sh
 make up            # Postgres (pgvector) + Redis
 make test-redis    # token bucket and sliding window against real Redis
+make e2e           # real Electron against a real gateway on :8000
 ```
+
+The E2E suite builds the production renderer, launches it in Electron, and
+drives it against a gateway that Playwright starts on `:8000` with the mock
+provider, hash embedder, and in-memory stores. It deliberately does not reuse a
+server already on that port, so stop `make dev` first. Linux CI runs it under
+`xvfb-run`.
 
 ## Commits
 

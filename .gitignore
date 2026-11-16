@@ -13,6 +13,8 @@ node_modules/
 desktop/dist/
 desktop/dist-electron/
 desktop/release/
+desktop/test-results/
+desktop/playwright-report/
 
 # env / secrets
 .env
