@@ -446,7 +446,7 @@ docs/             architecture · protocol · failure modes · generated metrics
 scripts/          check-docs.mjs (mermaid + link gate) · test-git-hooks.sh
 .githooks/        opt-in prepare-commit-msg attribution hook (`make hooks`)
 CONTRIBUTING.md   setup · commit style · attribution · PR flow
-.github/          CI (server matrix · migrations · local embedder · desktop · docs · hook) and release
+.github/          CI (server matrix · migrations · local embedder · redis · prometheus · desktop · docs · hook) and release
 ```
 
 ---

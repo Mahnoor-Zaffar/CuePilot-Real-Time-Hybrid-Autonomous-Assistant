@@ -10,8 +10,14 @@ make dev        # gateway on :8000 and the Electron client
 ```
 
 `make check` is the gate: ruff, desktop typecheck, server tests, the docs
-link/mermaid check, and the commit-hook test. CI runs the same steps plus the
-Postgres migration and local-embedder jobs.
+link/mermaid check, and the commit-hook test. CI adds the Postgres migration,
+local-embedder, Redis integration, and `promtool` jobs. Those need real
+services, so they are opt-in locally:
+
+```sh
+make up            # Postgres (pgvector) + Redis
+make test-redis    # token bucket and sliding window against real Redis
+```
 
 ## Commits
 
