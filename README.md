@@ -443,8 +443,10 @@ desktop/
   electron/       main process (hotkeys, clipboard, CSP, display-media audio) + preload
   scripts/        measure-idle.cjs · check-audio.cjs
 docs/             architecture · protocol · failure modes · generated metrics
-scripts/          check-docs.mjs (mermaid + link gate)
-.github/          CI (server matrix · migrations · local embedder · desktop · docs) and release
+scripts/          check-docs.mjs (mermaid + link gate) · test-git-hooks.sh
+.githooks/        opt-in prepare-commit-msg attribution hook (`make hooks`)
+CONTRIBUTING.md   setup · commit style · attribution · PR flow
+.github/          CI (server matrix · migrations · local embedder · desktop · docs · hook) and release
 ```
 
 ---
@@ -523,6 +525,13 @@ optional token-bucket limiter. The remaining operational bounds are documented i
 
 For a 10-minute review: `server/app/ws/outbound.py`, `server/app/llm/agent.py`,
 `server/app/retrieval/orchestrator.py`, then `desktop/src/useCueStream.ts`.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the `make check` gate, commit
+style, and the opt-in `Assisted-by: OpenCode` attribution hook.
 
 ---
 

@@ -163,3 +163,14 @@ jobs:
 
       - name: Check mermaid diagrams and relative links
         run: npm run check:docs
+
+  hygiene:
+    name: repo · commit hook
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # The hook is opt-in per clone, so prove it in a throwaway repo instead of
+      # enabling it here.
+      - name: Attribution hook behaviour
+        run: sh scripts/test-git-hooks.sh
